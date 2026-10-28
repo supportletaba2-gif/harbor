@@ -170,7 +170,7 @@ export function HostPanel({ host }: { host: Host }) {
       </p>
       {host.source === "display" ? (
         <p className="text-sm text-muted">
-          The browser cannot move the Windows pointer. Arm the page mouse below to click this page.
+          Share the entire screen, then arm the Windows pointer. The browser asks once to reach the tray on this PC.
         </p>
       ) : null}
       <Tray host={host} />

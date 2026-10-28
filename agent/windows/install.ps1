@@ -1,7 +1,6 @@
 # Installs the Harbor tray for the current Windows user. No administrator, no MSI.
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$DeskUrl,
+  [string]$DeskUrl = "https://delta-quartz-kite-jolly.grok.me",
   [string]$Branch = "main"
 )
 $ErrorActionPreference = "Stop"

@@ -4,7 +4,7 @@ export type QualityPreset = "smooth" | "balanced" | "sharp";
 
 export type DeskSource = "desk" | "display";
 
-export type Aim = "desk" | "page";
+export type Aim = "desk" | "page" | "windows";
 
 export type LinkStatus =
   | "idle"
@@ -90,7 +90,7 @@ export function isPreset(value: unknown): value is QualityPreset {
 }
 
 export function isAim(value: unknown): value is Aim {
-  return value === "desk" || value === "page";
+  return value === "desk" || value === "page" || value === "windows";
 }
 
 export function isSnapshot(value: unknown): value is MachineSnapshot {

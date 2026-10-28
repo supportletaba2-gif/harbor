@@ -24,26 +24,39 @@ export function Tray({ host }: { host: Host }) {
         </div>
       ) : null}
       <div className="flex flex-col gap-3 border-t border-line pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm text-muted">Tray</p>
-            <p className="text-base font-medium">Harbor agent</p>
-          </div>
-          <Button
-            variant={host.aim === "page" ? "primary" : "quiet"}
-            disabled={!live}
-            onClick={() => host.setAim(host.aim === "page" ? "desk" : "page")}
-          >
-            {host.aim === "page" ? "Page mouse on" : "Arm page mouse"}
-          </Button>
+        <div>
+          <p className="text-sm text-muted">Tray</p>
+          <p className="text-base font-medium">Harbor agent</p>
         </div>
+        <Button
+          variant={host.aim === "page" ? "primary" : "quiet"}
+          className="w-full"
+          disabled={!live}
+          onClick={() => host.setAim(host.aim === "page" ? "desk" : "page")}
+        >
+          {host.aim === "page" ? "Page mouse on" : "Arm page mouse"}
+        </Button>
+        <Button
+          variant={host.aim === "windows" ? "primary" : "quiet"}
+          className="w-full"
+          disabled={!live}
+          onClick={() => host.setAim(host.aim === "windows" ? "desk" : "windows")}
+        >
+          {host.aim === "windows" ? "Windows pointer on" : "Arm Windows pointer"}
+        </Button>
         <p className="text-sm text-muted">
           Picture and input use a peer-to-peer link. The PIN is checked there before any video is sent. The server only sees the setup messages.
         </p>
         <button type="button" data-agent-mark className="text-left text-sm text-muted" onClick={() => setMarked(true)}>
           {marked ? "Clicked" : "Click target"}
         </button>
-        <p className="text-sm text-muted">The page mouse clicks whatever is under the cursor here. It does not move the Windows pointer.</p>
+        <p className="text-sm text-muted">
+          {host.aim === "windows"
+            ? host.pointerReady
+              ? "The tray on this PC has the pointer. Share the entire screen so the picture matches the cursor."
+              : "The tray is not answering on this PC. Install it, then allow local network access when the browser asks."
+            : "The page mouse clicks this page. The Windows pointer needs the Harbor tray on this computer."}
+        </p>
       </div>
     </>
   );

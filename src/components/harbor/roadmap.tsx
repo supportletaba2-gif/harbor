@@ -25,7 +25,7 @@ export function Roadmap() {
         ))}
       </ol>
       <p className="max-w-xl text-sm text-muted">
-        The practice machine raises a CPU alert on both sides. The session log keeps that line. A Windows agent that moves the real pointer is still outside this preview.
+        Arm the Windows pointer after the Harbor tray is installed on that PC and the entire screen is shared. Until then, the page mouse only clicks this page.
       </p>
     </section>
   );

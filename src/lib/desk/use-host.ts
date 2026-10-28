@@ -5,6 +5,7 @@ import { FilePipe, type Transfer } from "./files";
 import { DeskLink } from "./link";
 import { createMachine } from "./machine";
 import { applyPageInput } from "./page-agent";
+import { aimNote, postWindowsPointer, windowsPointerReady } from "./windows-pointer";
 import {
   makeId,
   makePin,
@@ -74,6 +75,7 @@ export function useHostDesk() {
   const [aim, setAimState] = useState<Aim>("desk");
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [audit, setAudit] = useState<AuditLine[]>([]);
+  const [pointerReady, setPointerReady] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<DeskLink | null>(null);
@@ -171,6 +173,22 @@ export function useHostDesk() {
     return () => window.clearInterval(timer);
   }, [status]);
 
+  useEffect(() => {
+    if (aim !== "windows") return;
+    let stop = false;
+    const probe = () => {
+      void windowsPointerReady().then((ok) => {
+        if (!stop) setPointerReady(ok);
+      });
+    };
+    probe();
+    const timer = window.setInterval(probe, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [aim]);
+
   const noteActivity = useCallback((input: DeskInput, label: string) => {
     if (input.kind === "move") {
       const now = performance.now();
@@ -188,6 +206,11 @@ export function useHostDesk() {
         const result = applyPageInput(input);
         noteActivity(input, result.label);
         if (result.x !== undefined && result.y !== undefined) setCursor({ x: result.x, y: result.y });
+        return;
+      }
+      if (aimRef.current === "windows") {
+        if (sourceRef.current === "display") postWindowsPointer(input);
+        noteActivity(input, input.kind === "key" ? `Key ${input.key}` : "Windows pointer");
         return;
       }
       if (sourceRef.current !== "desk") {
@@ -300,6 +323,7 @@ export function useHostDesk() {
     aimRef.current = "desk";
     setAimState("desk");
     setCursor(null);
+    setPointerReady(false);
     rememberRef.current("Session ended");
     setSource(null);
     setStatus("ended");
@@ -493,8 +517,9 @@ export function useHostDesk() {
     aimRef.current = kind;
     setAimState(kind);
     if (kind === "desk") setCursor(null);
+    if (kind !== "windows") setPointerReady(false);
     if (statusRef.current === "live") linkRef.current?.send({ t: "aim", kind });
-    sendNoteRef.current(kind === "page" ? "Page mouse on" : "Page mouse off");
+    sendNoteRef.current(aimNote(kind));
   }, []);
 
   return {
@@ -514,6 +539,7 @@ export function useHostDesk() {
     metrics,
     aim,
     cursor,
+    pointerReady,
     audit,
     sendFile,
     cancelFile,

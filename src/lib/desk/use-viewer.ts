@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { auditText, type AuditLine } from "./audit";
 import { FilePipe, type Transfer } from "./files";
+import { aimNote } from "./windows-pointer";
 import { DeskLink } from "./link";
 import {
   type Aim,
@@ -236,7 +237,7 @@ export function useViewerDesk() {
   const setAim = useCallback((kind: Aim) => {
     setAimState(kind);
     if (statusRef.current === "live") linkRef.current?.send({ t: "aim", kind });
-    sendNoteRef.current(kind === "page" ? "Page mouse on" : "Page mouse off");
+    sendNoteRef.current(aimNote(kind));
   }, []);
 
   const endProcess = useCallback((pid: number) => {

@@ -123,10 +123,15 @@ export function ViewerPanel({
           <p className="text-sm text-muted">
             {viewer.aim === "page"
               ? "This pointer moves a cursor on the host page and clicks what is under it."
-              : "Click a window, then type. Notes and the terminal take keys. Drag a window by its title."}
+              : viewer.aim === "windows"
+                ? "This pointer moves the Windows cursor on the host PC. The host must be sharing the entire screen, with the Harbor tray running."
+                : "Click a window, then type. Notes and the terminal take keys. Drag a window by its title."}
           </p>
-          <Button variant="quiet" className="w-full" onClick={() => viewer.setAim(viewer.aim === "page" ? "desk" : "page")}>
-            {viewer.aim === "page" ? "Control the desk" : "Control this page"}
+          <Button variant={viewer.aim === "page" ? "primary" : "quiet"} className="w-full" onClick={() => viewer.setAim(viewer.aim === "page" ? "desk" : "page")}>
+            {viewer.aim === "page" ? "Page mouse on" : "Control this page"}
+          </Button>
+          <Button variant={viewer.aim === "windows" ? "primary" : "quiet"} className="w-full" onClick={() => viewer.setAim(viewer.aim === "windows" ? "desk" : "windows")}>
+            {viewer.aim === "windows" ? "Windows pointer on" : "Windows pointer"}
           </Button>
           <Button variant="danger" size="lg" className="w-full" onClick={viewer.disconnect}>
             Disconnect

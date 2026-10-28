@@ -1,45 +1,45 @@
 # Harbor on Windows
 
-This installs a tray icon for the current user. At install, and again at sign-in, it opens the published Harbor desk in the browser.
+The tray opens https://delta-quartz-kite-jolly.grok.me and listens at `http://127.0.0.1:47391/` for pointer moves, clicks, and a basic set of keys. It uses the primary screen.
 
-It does not install a service, does not need an administrator, and does not move the Windows pointer. Remote clicks still land on the practice desk in the browser. A later signed native agent would be required to move the real pointer.
+It does not need an administrator. It does not install a service. Quit it from the tray icon and the pointer stops listening.
 
-## Before you start
+## 1. Publish the current Harbor
 
-1. Publish Harbor and copy the `https://` address.
-2. On the Windows PC, use that address. `localhost` only works on the machine that is running the app.
+The Windows pointer button is in this repository. It is on the live site only after you publish this build from Grok. The address stays https://delta-quartz-kite-jolly.grok.me.
 
-## Install
+## 2. Install the tray
 
-Open PowerShell. You do not need "Run as administrator".
+On the Windows PC, open PowerShell. Do not use "Run as administrator".
 
 ```powershell
 $dest = Join-Path $env:TEMP "Install-Harbor.ps1"
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supportletaba2-gif/harbor/main/agent/windows/install.ps1" -OutFile $dest -UseBasicParsing
 Get-Content $dest
-powershell -NoProfile -ExecutionPolicy Bypass -File $dest -DeskUrl "https://YOUR-PUBLISHED-ADDRESS"
+powershell -NoProfile -ExecutionPolicy Bypass -File $dest
 ```
 
-`Get-Content` is there so you can read the script before it runs.
+Read the file `Get-Content` prints before the last line. The desk address is already set.
 
-The files land in `%LOCALAPPDATA%\Harbor`. A shortcut named Harbor is added to the current user's Startup folder.
+Files go to `%LOCALAPPDATA%\Harbor`. A Harbor shortcut is added to this user's Startup folder. The browser opens the desk.
 
-## Test from a second computer
+If Windows asks about local network access for the site, allow it. That is the browser reaching the tray on this same PC.
 
-1. On the Windows PC, the browser opens the desk. Choose **Start desk**. Keep the tab open. Write down the ID and PIN.
-2. On the other computer, open the same published address. Enter that ID and PIN. Choose **Connect**. Do not choose "Use the desk on this page".
-3. Click the picture and type. Notes and the terminal should change on the Windows PC's picture.
-4. Send a file, open **Clip**, or wait until the practice CPU crosses 50%. Both sides should show the log line.
+## 3. Share the screen and arm the pointer
 
-If the second computer cannot connect, both browsers must be able to reach the published site, and the host tab must stay open.
+1. On the Windows PC, choose **Share this display**, then the entire screen. Leave that tab open. Write down the ID and PIN.
+2. On the other computer, open https://delta-quartz-kite-jolly.grok.me. Enter that ID and PIN. Choose **Connect**. Do not choose **Use the desk on this page**.
+3. On either side, choose **Windows pointer** or **Arm Windows pointer**. The host page should say the tray has the pointer.
+4. On the other computer, click and drag on the picture. The Windows cursor should follow. A click lands where the cursor is. Letters, Enter, Backspace, Tab, Escape, and the arrow keys type into the focused Windows window.
+
+If the host still says the tray is not answering, the tray is quit, the port is busy, or the browser blocked local access. Re-open Harbor from the Startup shortcut and allow access for the site.
+
+The practice desk does not move the Windows cursor. Share the entire screen first, or the picture and the cursor will not match.
 
 ## Remove it
 
-Quit Harbor from the tray icon. Then delete these two items:
-
-- `%LOCALAPPDATA%\Harbor`
-- the Harbor shortcut in the Startup folder (`shell:startup`)
+Quit Harbor from the tray icon. Then delete `%LOCALAPPDATA%\Harbor` and the Harbor shortcut in `shell:startup`.
 
 ## Why this is not an MSI
 
-Microsoft's packaging guidance treats an internal tool as an unpackaged app and installs it with a script. An MSI also has to be signed or Windows SmartScreen blocks it. This environment cannot sign or build a Windows installer. When a native pointer agent exists, the next package is a signed MSIX, not an unsigned MSI.
+Microsoft's packaging note for an internal tool is an unpackaged app installed by a script. An MSI has to be signed or SmartScreen blocks it. This tray is the pointer agent you can install today. A signed MSIX is the later package, after the pointer path has been proven on your PC.
