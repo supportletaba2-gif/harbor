@@ -17,7 +17,7 @@ export function useViewerDesk() {
   const [remoteId, setRemoteId] = useState("");
   const [pin, setPin] = useState("");
   const [status, setStatus] = useState<LinkStatus>("idle");
-  const [detail, setDetail] = useState("Enter the desk ID and PIN.");
+  const [detail, setDetail] = useState("On the other computer, share the display first. Then paste that ID and PIN.");
   const [quality, setQuality] = useState<QualityPreset>("balanced");
   const [source, setSource] = useState<DeskSource>("desk");
   const [rtt, setRtt] = useState<number | null>(null);

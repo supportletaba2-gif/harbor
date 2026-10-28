@@ -29,7 +29,7 @@ export function HostPanel({ host }: { host: Host }) {
           : host.status === "error"
             ? "Error"
             : host.status === "idle"
-              ? "Idle"
+              ? "Not live"
               : "Connecting";
 
   function point(event: PointerEvent<HTMLDivElement>) {
@@ -84,47 +84,38 @@ export function HostPanel({ host }: { host: Host }) {
             host.source === "display" ? "block" : "hidden",
           )}
         />
-        {!host.armed && host.source !== "display" ? (
-          <div className="pointer-events-none absolute inset-0 flex flex-col bg-desk">
-            <div className="flex h-8 items-center justify-between bg-desk-bar px-3 text-xs text-muted">
-              <span>Practice desk</span>
-              <span>Not shared</span>
-            </div>
-            <div className="relative min-h-0 flex-1">
-              <div className="absolute top-4 left-4 w-2/5 rounded-sm border border-line bg-desk-window p-3">
-                <p className="text-xs text-muted">Notes</p>
-                <p className="mt-2 text-sm text-fg">Keys from the viewer land here.</p>
-              </div>
-              <div className="absolute top-8 right-4 w-1/3 rounded-sm border border-line bg-desk-window p-3">
-                <p className="text-xs text-muted">Calculator</p>
-                <p className="mt-2 text-right font-mono text-lg text-fg tabular-nums">0</p>
-              </div>
-              <div className="absolute bottom-4 left-4 w-1/2 rounded-sm border border-line bg-desk-window p-3">
-                <p className="text-xs text-muted">Terminal</p>
-                <p className="mt-2 font-mono text-sm text-fg">$ help</p>
-              </div>
-            </div>
+        {!host.armed ? (
+          <div className="absolute inset-0 grid place-items-center bg-desk px-6 text-center">
+            <p className="text-sm text-muted">Not shared. Share this display, then use the ID and PIN on the other computer.</p>
           </div>
         ) : null}
       </div>
 
       <div className="flex items-end justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm text-muted">Your ID</p>
           <p className="font-mono text-xl tracking-tight text-fg tabular-nums sm:text-2xl">
             {host.id ? groupId(host.id) : "··· ··· ···"}
           </p>
         </div>
-        <Button variant="ghost" size="md" onClick={host.newId} disabled={host.running || !host.id}>
-          New ID
+        <Button
+          variant="ghost"
+          size="md"
+          disabled={!host.id}
+          onClick={() => void navigator.clipboard.writeText(groupId(host.id))}
+        >
+          Copy ID
         </Button>
       </div>
+      {!host.running ? (
+        <p className="text-sm text-muted">Not live until you share. The other computer cannot connect while this says Not live.</p>
+      ) : null}
 
       <form
         className="flex flex-col gap-3"
         onSubmit={(event) => {
           event.preventDefault();
-          void host.start("desk");
+          void host.start("display");
         }}
       >
         <label className="flex flex-col gap-2 text-sm text-muted">
@@ -143,20 +134,18 @@ export function HostPanel({ host }: { host: Host }) {
           <Button variant="ghost" onClick={host.newPin} disabled={host.running}>
             New PIN
           </Button>
+          <Button variant="ghost" disabled={!host.pin} onClick={() => void navigator.clipboard.writeText(host.pin)}>
+            Copy PIN
+          </Button>
         </div>
         {host.running ? (
           <Button variant="danger" size="lg" className="w-full" onClick={host.end}>
             End session
           </Button>
         ) : (
-          <>
-            <Button type="submit" size="lg" className="w-full" disabled={!host.canStart}>
-              Start desk
-            </Button>
-            <Button variant="quiet" size="lg" className="w-full" disabled={!host.canStart} onClick={() => void host.start("display")}>
-              Share this display
-            </Button>
-          </>
+          <Button type="button" size="lg" className="w-full" disabled={!host.canStart} onClick={() => void host.start("display")}>
+            Share this display
+          </Button>
         )}
       </form>
 
@@ -180,7 +169,6 @@ export function HostPanel({ host }: { host: Host }) {
         files={host.files}
         chat={host.chat}
         clip={host.clip}
-        metrics={host.metrics}
         audit={host.audit}
         onSendFile={host.sendFile}
         onCancel={host.cancelFile}

@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatBytes, type Transfer } from "@/lib/desk/files";
 import type { AuditLine } from "@/lib/desk/audit";
-import type { ChatLine, MachineSnapshot } from "@/lib/desk/types";
+import type { ChatLine } from "@/lib/desk/types";
 import { cn } from "@/lib/utils";
 
-type Tab = "files" | "chat" | "machine" | "clip";
+type Tab = "files" | "chat" | "clip";
 
 export function SessionTools({
   live,
@@ -14,26 +14,22 @@ export function SessionTools({
   files,
   chat,
   clip,
-  metrics,
   audit,
   onSendFile,
   onCancel,
   onChat,
   onClip,
-  onKill,
 }: {
   live: boolean;
   self: "host" | "viewer";
   files: Transfer[];
   chat: ChatLine[];
   clip: string;
-  metrics: MachineSnapshot | null;
   audit: AuditLine[];
   onSendFile: (file: File) => void;
   onCancel: (id: string) => void;
   onChat: (text: string) => void;
   onClip: (text: string) => void;
-  onKill?: (pid: number) => void;
 }) {
   const [tab, setTab] = useState<Tab>("files");
   const [draft, setDraft] = useState("");
@@ -41,7 +37,7 @@ export function SessionTools({
   const fileRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const busy = files.some((file) => file.direction === "out" && file.status === "active");
-  const open = live || files.length > 0 || chat.length > 0 || metrics !== null || clip.length > 0 || audit.length > 0;
+  const open = live || files.length > 0 || chat.length > 0 || clip.length > 0 || audit.length > 0;
 
   useEffect(() => {
     setClipDraft(clip);
@@ -53,7 +49,7 @@ export function SessionTools({
   }, [chat, tab]);
 
   if (!open) {
-    return <p className="text-sm text-muted">Files, chat, clipboard, and the machine report open with the session.</p>;
+    return <p className="text-sm text-muted">Files, chat, and clipboard open with the session.</p>;
   }
 
   const other = self === "host" ? "Viewer" : "Desk";
@@ -72,17 +68,11 @@ export function SessionTools({
           </ul>
         </div>
       ) : null}
-      {metrics?.alert ? (
-        <p className="text-sm text-danger" data-alert>
-          {metrics.alert}. Practice machine, not this computer.
-        </p>
-      ) : null}
-      <div className="grid grid-cols-4 gap-2" role="tablist" aria-label="Session tools">
+      <div className="grid grid-cols-3 gap-2" role="tablist" aria-label="Session tools">
         {(
           [
             ["files", "Files"],
             ["chat", "Chat"],
-            ["machine", "Machine"],
             ["clip", "Clip"],
           ] as const
         ).map(([id, label]) => (
@@ -169,45 +159,6 @@ export function SessionTools({
         </form>
       ) : null}
 
-      {tab === "machine" ? (
-        <div role="tabpanel" className="flex flex-col gap-3">
-          {metrics ? (
-            <>
-              <div className="grid grid-cols-3 gap-2">
-                <Stat label="CPU" value={`${metrics.cpu}%`} />
-                <Stat label="Memory" value={`${metrics.ramMb}`} unit="MB" />
-                <Stat label="Disk" value={`${metrics.diskGb}`} unit="GB" />
-              </div>
-              <p className="text-sm text-muted">
-                Practice machine. Not this computer. {metrics.ramTotalMb} MB memory, {metrics.diskTotalGb} GB disk.
-              </p>
-              {metrics.procs.length === 0 ? (
-                <p className="text-sm text-faint">No processes left.</p>
-              ) : (
-                <ul className="flex flex-col">
-                  {metrics.procs.map((proc) => (
-                    <li key={proc.pid} className="flex items-center gap-3 border-t border-line py-2">
-                      <span className="w-12 shrink-0 font-mono text-sm text-faint tabular-nums">{proc.pid}</span>
-                      <span className="min-w-0 flex-1 truncate text-sm">{proc.name}</span>
-                      <span className="font-mono text-sm text-muted tabular-nums">{proc.cpu}%</span>
-                      {onKill ? (
-                        <Button variant="ghost" onClick={() => onKill(proc.pid)}>
-                          End
-                        </Button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : (
-            <p className="text-sm text-muted">
-              {live ? "Waiting for the first report…" : "The report appears once the desk is running."}
-            </p>
-          )}
-        </div>
-      ) : null}
-
       {tab === "clip" ? (
         <form
           role="tabpanel"
@@ -244,18 +195,6 @@ export function SessionTools({
           <p className="text-sm text-muted">Text on the encrypted link. It does not paste into the other computer.</p>
         </form>
       ) : null}
-    </div>
-  );
-}
-
-function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
-  return (
-    <div className="rounded-sm bg-subtle px-3 py-2">
-      <p className="text-sm text-muted">{label}</p>
-      <p className="font-mono text-sm text-fg tabular-nums">
-        {value}
-        {unit ? <span className="text-faint"> {unit}</span> : null}
-      </p>
     </div>
   );
 }

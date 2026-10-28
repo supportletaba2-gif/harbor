@@ -8,7 +8,7 @@
  * join — it registers the peer, returns the roster, and prunes stale rows.
  */
 import { z } from "zod";
-import { getSql, type Sql } from "@/lib/db";
+import { dbSource, getSql, type Sql } from "@/lib/db";
 import type { PeerRow, RtcPollResponse, SignalRow } from "./p2p";
 
 const ID = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
@@ -103,6 +103,36 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function publicReason(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "unknown";
+  return raw.replace(/postgres(?:ql)?:\/\/\S+/gi, "database").replace(/\s+/g, " ").slice(0, 160);
+}
+
+/** Two computers cannot meet on an in-memory database. Publish must attach Neon. */
+function sharedStore(): Response | null {
+  if (process.env.VERCEL && dbSource !== "neon") {
+    return json(
+      {
+        ok: false,
+        db: dbSource,
+        error: "signaling failed",
+        reason: "The shared database is not attached to this publish.",
+      },
+      503,
+    );
+  }
+  return null;
+}
+
+async function handleProbe(): Promise<Response> {
+  const blocked = sharedStore();
+  if (blocked) return blocked;
+  const sql = await getSql();
+  await ensureSchema(sql);
+  await sql.query("SELECT 1 AS ok");
+  return json({ ok: true, db: dbSource });
+}
+
 /** GET /api/rtc?room&peer&name&since — join (since=0), heartbeat, and inbox. */
 async function handleGet(url: URL): Promise<Response> {
   const parsed = z
@@ -119,6 +149,8 @@ async function handleGet(url: URL): Promise<Response> {
       since: url.searchParams.get("since") ?? 0,
     });
   if (!parsed.success) return json({ error: "invalid query" }, 400);
+  const blocked = sharedStore();
+  if (blocked) return blocked;
   const { room, peer, name, since } = parsed.data;
 
   const sql = await getSql();
@@ -158,6 +190,8 @@ async function handlePost(request: Request): Promise<Response> {
   const parsed = postSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid request" }, 400);
   const msg = parsed.data;
+  const blocked = sharedStore();
+  if (blocked) return blocked;
   const sql = await getSql();
   await ensureSchema(sql);
 
@@ -176,11 +210,13 @@ async function handlePost(request: Request): Promise<Response> {
 /** Request entrypoint for the /api/rtc route (GET poll, POST signal/leave). */
 export async function handleSignaling(request: Request): Promise<Response> {
   try {
-    if (request.method === "GET") return await handleGet(new URL(request.url));
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.searchParams.get("probe") === "1") return await handleProbe();
+    if (request.method === "GET") return await handleGet(url);
     if (request.method === "POST") return await handlePost(request);
     return json({ error: "method not allowed" }, 405);
   } catch (error) {
     console.error("[rtc] signaling error:", error);
-    return json({ error: "signaling failed" }, 500);
+    return json({ error: "signaling failed", reason: publicReason(error) }, 500);
   }
 }

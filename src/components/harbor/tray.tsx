@@ -1,11 +1,9 @@
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { useHostDesk } from "@/lib/desk/use-host";
 
 type Host = ReturnType<typeof useHostDesk>;
 
 export function Tray({ host }: { host: Host }) {
-  const [marked, setMarked] = useState(false);
   const live = host.status === "live";
 
   return (
@@ -47,9 +45,6 @@ export function Tray({ host }: { host: Host }) {
         <p className="text-sm text-muted">
           Picture and input use a peer-to-peer link. The PIN is checked there before any video is sent. The server only sees the setup messages.
         </p>
-        <button type="button" data-agent-mark className="text-left text-sm text-muted" onClick={() => setMarked(true)}>
-          {marked ? "Clicked" : "Click target"}
-        </button>
         <p className="text-sm text-muted">
           {host.aim === "windows"
             ? host.pointerReady

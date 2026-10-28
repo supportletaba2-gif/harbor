@@ -1,4 +1,5 @@
 import { pendingMigrations } from "../../scripts/migration-plan.mjs";
+import { pgSsl, postgresUrl } from "../../scripts/postgres-url.mjs";
 
 /** Which database backend is active. */
 export type DbSource = "neon" | "pglite";
@@ -93,7 +94,13 @@ function createNeonSql(): Promise<Sql> {
     types.setTypeParser(OID_INT8, Number);
     types.setTypeParser(OID_DATE, identity);
     types.setTypeParser(OID_INTERVAL, identity);
-    const pool = new Pool({ connectionString: databaseUrl });
+    const connectionString = postgresUrl(databaseUrl!);
+    const pool = new Pool({
+      connectionString,
+      max: 1,
+      connectionTimeoutMillis: 12000,
+      ssl: pgSsl(connectionString),
+    });
     return toSql(async <T>(text: string, params: unknown[]) => {
       const res = await pool.query(text, params);
       return res.rows as T[];

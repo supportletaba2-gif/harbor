@@ -130,27 +130,21 @@ export class DeskLink {
     try {
       await this.poll();
       this.failures = 0;
-    } catch {
+    } catch (error) {
       this.failures += 1;
-      if (this.failures === 3) {
-        this.opts.onEvent({
-          type: "status",
-          status: "signaling",
-          detail: "Reaching the connection service…",
-        });
-      }
-      if (this.failures >= 8) {
+      const reason = error instanceof Error ? error.message : "signaling";
+      if (this.failures >= 3) {
         this.opts.onEvent({
           type: "status",
           status: "error",
-          detail: "The connection service isn't responding.",
+          detail: `The connection service failed. ${reason}`.slice(0, 180),
         });
         this.stop();
         return;
       }
     }
     if (this.closed) return;
-    this.watchTimeouts();
+    if (this.failures === 0) this.watchTimeouts();
     this.timer = setTimeout(() => void this.tick(), this.authed ? 1600 : 400);
   }
 
@@ -158,7 +152,11 @@ export class DeskLink {
     if (this.opts.role !== "viewer" || this.authed || this.closed) return;
     const elapsed = Date.now() - this.startedAt;
     if (!this.sawHost && elapsed > 5000) {
-      this.opts.onEvent({ type: "status", status: "error", detail: "No desk is waiting on that ID." });
+      this.opts.onEvent({
+        type: "status",
+        status: "error",
+        detail: `No desk is waiting on ${this.opts.room}. On the other computer, choose Share this display and use the ID shown there.`,
+      });
       this.stop();
     } else if (this.sawHost && elapsed > 12000) {
       this.opts.onEvent({
@@ -179,7 +177,16 @@ export class DeskLink {
     });
     const res = await fetch(`/api/rtc?${params}`);
     if (this.closed) return;
-    if (!res.ok) throw new Error(`signaling ${res.status}`);
+    if (!res.ok) {
+      let reason = `signaling ${res.status}`;
+      try {
+        const body = (await res.json()) as { reason?: unknown };
+        if (typeof body.reason === "string" && body.reason) reason = body.reason;
+      } catch {
+        // The status is enough when the body is not JSON.
+      }
+      throw new Error(reason);
+    }
     const body = (await res.json()) as {
       peers: { id: string; name: string }[];
       signals: { id: number; from: string; kind: "offer" | "answer" | "ice"; payload: unknown }[];

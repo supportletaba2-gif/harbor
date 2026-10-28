@@ -61,7 +61,7 @@ export function useHostDesk() {
   const [id, setId] = useState("");
   const [pin, setPin] = useState("");
   const [status, setStatus] = useState<LinkStatus>("idle");
-  const [detail, setDetail] = useState("Set a PIN, then start the desk.");
+  const [detail, setDetail] = useState("Not live. Choose Share this display, then copy this ID and PIN.");
   const [source, setSource] = useState<DeskSource | null>(null);
   const [activity, setActivity] = useState("No remote input yet");
   const [notes, setNotes] = useState("");
@@ -159,6 +159,7 @@ export function useHostDesk() {
   }, []);
 
   useEffect(() => {
+    if (source !== "desk") return;
     if (status !== "waiting" && status !== "live" && status !== "connecting" && status !== "checking" && status !== "signaling") {
       return;
     }
@@ -171,7 +172,7 @@ export function useHostDesk() {
     beat();
     const timer = window.setInterval(beat, 2000);
     return () => window.clearInterval(timer);
-  }, [status]);
+  }, [source, status]);
 
   useEffect(() => {
     if (aim !== "windows") return;
@@ -327,7 +328,7 @@ export function useHostDesk() {
     rememberRef.current("Session ended");
     setSource(null);
     setStatus("ended");
-    setDetail("Session ended. Start again when you are ready.");
+    setDetail("Session ended. Share this display to go live again.");
     setRtt(null);
     setArmed(false);
     setMetrics(null);
@@ -348,6 +349,8 @@ export function useHostDesk() {
       sourceRef.current = kind;
       setSource(kind);
       if (kind === "display") {
+        aimRef.current = "windows";
+        setAimState("windows");
         setArmed(false);
         try {
           const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -366,7 +369,7 @@ export function useHostDesk() {
         } catch {
           sourceRef.current = "desk";
           setSource(null);
-          setDetail("Display sharing was blocked. Start the practice desk instead.");
+          setDetail("Display sharing was cancelled. Choose Share this display and allow the screen.");
           return;
         }
       } else {
@@ -390,23 +393,32 @@ export function useHostDesk() {
         onFileChannel: (channel) => pipeRef.current.attach(channel),
         onEvent: (event) => {
           if (event.type === "status") {
-            if (event.status === "live" && statusRef.current !== "live") sendNoteRef.current("Viewer connected");
+            if (event.status === "live" && statusRef.current !== "live") {
+              sendNoteRef.current("Viewer connected");
+              if (sourceRef.current === "display") {
+                aimRef.current = "windows";
+                setAimState("windows");
+                linkRef.current?.send({ t: "aim", kind: "windows" });
+              }
+            }
             if (event.status === "waiting" && statusRef.current === "live") sendNoteRef.current("Viewer left");
             if (event.status === "live") {
               pipeRef.current.arm();
-              const snapshot = machineRef.current.tick();
-              setMetrics(snapshot);
-              if (statusRef.current !== "live") {
-                const fresh = machineRef.current.drain();
-                if (fresh.length) fresh.forEach((line) => sendNoteRef.current(line));
-                else {
-                  const current = machineRef.current.alertLine();
-                  if (current) relayRef.current(current);
+              if (sourceRef.current === "desk") {
+                const snapshot = machineRef.current.tick();
+                setMetrics(snapshot);
+                if (statusRef.current !== "live") {
+                  const fresh = machineRef.current.drain();
+                  if (fresh.length) fresh.forEach((line) => sendNoteRef.current(line));
+                  else {
+                    const current = machineRef.current.alertLine();
+                    if (current) relayRef.current(current);
+                  }
                 }
+                window.setTimeout(() => {
+                  if (statusRef.current === "live") linkRef.current?.send({ t: "metrics", snapshot: machineRef.current.tick() });
+                }, 250);
               }
-              window.setTimeout(() => {
-                if (statusRef.current === "live") linkRef.current?.send({ t: "metrics", snapshot: machineRef.current.tick() });
-              }, 250);
             }
             if (event.status === "waiting" || event.status === "ended" || event.status === "error") {
               pipeRef.current.disarm();

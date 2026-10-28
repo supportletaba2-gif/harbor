@@ -31,15 +31,7 @@ function contentNorm(video: HTMLVideoElement, clientX: number, clientY: number) 
   };
 }
 
-export function ViewerPanel({
-  viewer,
-  onUseLocal,
-  localReady,
-}: {
-  viewer: Viewer;
-  onUseLocal: () => void;
-  localReady: boolean;
-}) {
+export function ViewerPanel({ viewer }: { viewer: Viewer }) {
   const moveRaf = useRef(0);
   const pending = useRef<{ x: number; y: number } | null>(null);
   const live = viewer.status === "live";
@@ -118,14 +110,14 @@ export function ViewerPanel({
           <p className="font-mono text-sm text-muted tabular-nums">
             {viewer.rtt !== null ? `${viewer.rtt} ms` : "Link up"}
             {viewer.fps !== null ? ` · ${viewer.fps} fps` : ""}
-            {viewer.source === "display" ? " · live display" : " · practice desk"}
+            {viewer.source === "display" ? " · live display" : ""}
           </p>
           <p className="text-sm text-muted">
             {viewer.aim === "page"
               ? "This pointer moves a cursor on the host page and clicks what is under it."
               : viewer.aim === "windows"
                 ? "This pointer moves the Windows cursor on the host PC. The host must be sharing the entire screen, with the Harbor tray running."
-                : "Click a window, then type. Notes and the terminal take keys. Drag a window by its title."}
+                : "The Windows pointer moves the mouse on the shared PC. Share the entire screen, with the Harbor tray running."}
           </p>
           <Button variant={viewer.aim === "page" ? "primary" : "quiet"} className="w-full" onClick={() => viewer.setAim(viewer.aim === "page" ? "desk" : "page")}>
             {viewer.aim === "page" ? "Page mouse on" : "Control this page"}
@@ -170,9 +162,7 @@ export function ViewerPanel({
               aria-label="Desk PIN"
             />
           </label>
-          <Button variant="quiet" className="w-full" disabled={!localReady || viewer.running} onClick={onUseLocal}>
-            Use the desk on this page
-          </Button>
+          <p className="text-sm text-muted">On the other computer, choose Share this display first. Paste its ID and PIN here.</p>
           {viewer.running ? (
             <Button variant="danger" size="lg" className="w-full" onClick={viewer.disconnect}>
               Cancel
@@ -193,13 +183,11 @@ export function ViewerPanel({
         files={viewer.files}
         chat={viewer.chat}
         clip={viewer.clip}
-        metrics={viewer.metrics}
         audit={viewer.audit}
         onSendFile={viewer.sendFile}
         onCancel={viewer.cancelFile}
         onChat={viewer.say}
         onClip={viewer.sendClip}
-        onKill={viewer.endProcess}
       />
     </section>
   );

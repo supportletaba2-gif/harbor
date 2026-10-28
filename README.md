@@ -1,24 +1,21 @@
 # Harbor
 
-A desk you open with an ID and a PIN. The picture, controls, files, clipboard, practice shell, and practice-machine alerts travel on an encrypted peer link. The server only carries the connection setup.
+One computer shares its display. The other opens it with that ID and PIN.
 
 Published desk: https://delta-quartz-kite-jolly.grok.me
 
 `main`, `developer`, and `test` hold the same build.
 
-## Windows
+## Update the Windows PC
 
-The tray opens that desk and listens on this PC for the Windows pointer. It does not need an administrator. An unsigned MSI is not used.
-
-Publish the latest Harbor from Grok before you expect the **Windows pointer** button. An older published page does not have it.
+Paste this in PowerShell whenever the agent should be updated. It does not need an administrator. It downloads the latest tray, opens the published desk, and checks the connection service.
 
 ```powershell
-$dest = Join-Path $env:TEMP "Install-Harbor.ps1"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supportletaba2-gif/harbor/main/agent/windows/install.ps1" -OutFile $dest -UseBasicParsing
-Get-Content $dest
+$dest = Join-Path $env:TEMP "Update-Harbor.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supportletaba2-gif/harbor/main/agent/windows/update.ps1" -OutFile $dest -UseBasicParsing
 powershell -NoProfile -ExecutionPolicy Bypass -File $dest
 ```
 
-The address is already https://delta-quartz-kite-jolly.grok.me. Read the script when `Get-Content` prints it, then run the last line.
+Then, on that PC, choose **Share this display**. Wait until the status says **Waiting**, not **Not live**. Copy the ID and PIN from that screen. On the other computer, paste the same ID and PIN and choose **Connect**. The PIN is checked on the encrypted link after the desk is found. A desk that is still Not live, or a different ID, cannot connect.
 
-The rest of the steps are in [agent/windows/README.md](agent/windows/README.md).
+Publish this build from Grok before expecting the connection check to pass. The address stays the same. Until that publish, the live connection service answers with an error, which is what the last test hit.

@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import pg from "pg";
 import { pendingMigrations } from "./migration-plan.mjs";
+import { pgSsl, postgresUrl } from "./postgres-url.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -42,7 +43,13 @@ async function main() {
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  const connectionString = postgresUrl(databaseUrl);
+  const pool = new pg.Pool({
+    connectionString,
+    max: 1,
+    connectionTimeoutMillis: 20000,
+    ssl: pgSsl(connectionString),
+  });
   const client = await pool.connect();
   try {
     await client.query(
