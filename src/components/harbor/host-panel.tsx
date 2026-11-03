@@ -95,20 +95,20 @@ export function HostPanel({ host }: { host: Host }) {
         <div className="min-w-0 flex-1">
           <p className="text-sm text-muted">Your ID</p>
           <p className="font-mono text-xl tracking-tight text-fg tabular-nums sm:text-2xl">
-            {host.id ? groupId(host.id) : "··· ··· ···"}
+            {host.running && host.id ? groupId(host.id) : "··· ··· ···"}
           </p>
         </div>
         <Button
           variant="ghost"
           size="md"
-          disabled={!host.id}
+          disabled={!host.running || !host.id}
           onClick={() => void navigator.clipboard.writeText(groupId(host.id))}
         >
           Copy ID
         </Button>
       </div>
       {!host.running ? (
-        <p className="text-sm text-muted">Not live until you share. The other computer cannot connect while this says Not live.</p>
+        <p className="text-sm text-muted">Share this display first. Copy the ID only after this says Waiting.</p>
       ) : null}
 
       <form
@@ -134,7 +134,7 @@ export function HostPanel({ host }: { host: Host }) {
           <Button variant="ghost" onClick={host.newPin} disabled={host.running}>
             New PIN
           </Button>
-          <Button variant="ghost" disabled={!host.pin} onClick={() => void navigator.clipboard.writeText(host.pin)}>
+          <Button variant="ghost" disabled={!host.running || !host.pin} onClick={() => void navigator.clipboard.writeText(host.pin)}>
             Copy PIN
           </Button>
         </div>

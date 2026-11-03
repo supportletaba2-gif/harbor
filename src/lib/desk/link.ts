@@ -15,6 +15,7 @@ import {
   isAim,
   isPreset,
   isSnapshot,
+  groupId,
   peerToken,
   pinsMatch,
   PRESETS,
@@ -151,14 +152,20 @@ export class DeskLink {
   private watchTimeouts() {
     if (this.opts.role !== "viewer" || this.authed || this.closed) return;
     const elapsed = Date.now() - this.startedAt;
-    if (!this.sawHost && elapsed > 5000) {
+    if (!this.sawHost && elapsed > 8000 && elapsed < 45000) {
+      this.opts.onEvent({
+        type: "status",
+        status: "waiting",
+        detail: `Still looking for ${groupId(this.opts.room)}. On the other computer, choose Share this display and wait until it says Waiting.`,
+      });
+    } else if (!this.sawHost && elapsed > 45000) {
       this.opts.onEvent({
         type: "status",
         status: "error",
-        detail: `No desk is waiting on ${this.opts.room}. On the other computer, choose Share this display and use the ID shown there.`,
+        detail: `No desk is waiting on ${groupId(this.opts.room)}. On that computer, choose Share this display and copy the ID only after it says Waiting.`,
       });
       this.stop();
-    } else if (this.sawHost && elapsed > 12000) {
+    } else if (this.sawHost && elapsed > 20000) {
       this.opts.onEvent({
         type: "status",
         status: "error",

@@ -162,7 +162,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
               aria-label="Desk PIN"
             />
           </label>
-          <p className="text-sm text-muted">On the other computer, choose Share this display first. Paste its ID and PIN here.</p>
+          <p className="text-sm text-muted">On the other computer, choose Share this display and wait until it says Waiting. Then paste that ID and PIN.</p>
           {viewer.running ? (
             <Button variant="danger" size="lg" className="w-full" onClick={viewer.disconnect}>
               Cancel

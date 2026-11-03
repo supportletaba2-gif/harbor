@@ -61,7 +61,7 @@ export function useHostDesk() {
   const [id, setId] = useState("");
   const [pin, setPin] = useState("");
   const [status, setStatus] = useState<LinkStatus>("idle");
-  const [detail, setDetail] = useState("Not live. Choose Share this display, then copy this ID and PIN.");
+  const [detail, setDetail] = useState("Choose Share this display. Copy the ID only after this says Waiting.");
   const [source, setSource] = useState<DeskSource | null>(null);
   const [activity, setActivity] = useState("No remote input yet");
   const [notes, setNotes] = useState("");
@@ -348,30 +348,17 @@ export function useHostDesk() {
       fileState.current.clear();
       sourceRef.current = kind;
       setSource(kind);
+      const capture =
+        kind === "display"
+          ? navigator.mediaDevices.getDisplayMedia({
+              video: { frameRate: { ideal: 24, max: 30 } },
+              audio: false,
+            })
+          : null;
       if (kind === "display") {
         aimRef.current = "windows";
         setAimState("windows");
         setArmed(false);
-        try {
-          const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: { ideal: 24, max: 30 } },
-            audio: false,
-          });
-          const previous = streamRef.current;
-          streamRef.current = stream;
-          if (previous && previous !== stream) previous.getVideoTracks().forEach((track) => track.stop());
-          if (previewRef.current) {
-            previewRef.current.srcObject = stream;
-            await previewRef.current.play().catch(() => {});
-          }
-          const track = stream.getVideoTracks()[0];
-          if (track) track.onended = () => end();
-        } catch {
-          sourceRef.current = "desk";
-          setSource(null);
-          setDetail("Display sharing was cancelled. Choose Share this display and allow the screen.");
-          return;
-        }
       } else {
         setArmed(true);
         await new Promise<void>((resolve) => {
@@ -452,6 +439,32 @@ export function useHostDesk() {
       });
       linkRef.current = link;
       link.start();
+      if (!capture) return;
+      try {
+        const stream = await capture;
+        const previous = streamRef.current;
+        streamRef.current = stream;
+        if (previous && previous !== stream) previous.getVideoTracks().forEach((track) => track.stop());
+        if (previewRef.current) {
+          previewRef.current.srcObject = stream;
+          await previewRef.current.play().catch(() => {});
+        }
+        const track = stream.getVideoTracks()[0];
+        if (track) track.onended = () => end();
+        await link.setStream(stream);
+      } catch {
+        link.stop();
+        linkRef.current = null;
+        streamRef.current?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        sourceRef.current = "desk";
+        aimRef.current = "desk";
+        setAimState("desk");
+        setSource(null);
+        setStatus("idle");
+        setArmed(false);
+        setDetail("Display sharing was cancelled. Choose Share this display and allow the screen.");
+      }
     },
     [apply, applyQuality, end, id, pin],
   );
