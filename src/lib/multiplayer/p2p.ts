@@ -90,7 +90,9 @@ export function defaultIceServers(): RTCIceServer[] {
   // gathering, so either one being unreachable costs nothing.
   return [
     {
-      urls: urls?.length ? urls : ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
+      urls: urls?.length
+        ? urls
+        : ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
     },
   ];
 }

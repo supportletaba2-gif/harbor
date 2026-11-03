@@ -72,10 +72,15 @@ export class DeskLink {
   private sawHost = false;
   private failures = 0;
   private pendingIce: RTCIceCandidateInit[] = [];
+  private outboundIce: RTCIceCandidateInit[] = [];
+  private flushingIce = false;
   private makingOffer = false;
   private preset: QualityPreset = "balanced";
   private quietUntil = 0;
   private connectingSince = 0;
+  private iceRestarts = 0;
+  private recovering = false;
+  private recoverTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly skipped = new Set<string>();
   private readonly startedAt = Date.now();
 
@@ -131,6 +136,7 @@ export class DeskLink {
     try {
       await this.poll();
       this.failures = 0;
+      void this.flushOutboundIce();
     } catch (error) {
       this.failures += 1;
       const reason = error instanceof Error ? error.message : "signaling";
@@ -165,11 +171,11 @@ export class DeskLink {
         detail: `No desk is waiting on ${groupId(this.opts.room)}. On that computer, choose Share this display and copy the ID only after it says Waiting.`,
       });
       this.stop();
-    } else if (this.sawHost && elapsed > 20000) {
+    } else if (this.sawHost && !this.authed && elapsed > 50000) {
       this.opts.onEvent({
         type: "status",
         status: "error",
-        detail: "The desk didn't accept this connection. It may already be in use.",
+        detail: "The secure link could not cross these two networks. On the sharing computer, wait until it says Waiting, then try Connect again.",
       });
       this.stop();
     }
@@ -221,14 +227,33 @@ export class DeskLink {
           detail: "Viewer disconnected. Waiting for the next one.",
         });
       }
-      if (this.remoteId && this.pc && !this.authed && this.connectingSince && Date.now() - this.connectingSince > 6000) {
-        this.skipped.add(this.remoteId);
-        this.dropPeer();
-        this.opts.onEvent({
-          type: "status",
-          status: "waiting",
-          detail: "That viewer didn't finish connecting. Waiting for another.",
-        });
+      if (this.remoteId && this.pc && !this.authed && this.connectingSince) {
+        const age = Date.now() - this.connectingSince;
+        const state = this.pc.connectionState;
+        const stillOpening = state === "new" || state === "connecting";
+        if (
+          !this.recovering &&
+          !stillOpening &&
+          state !== "connected" &&
+          this.iceRestarts >= 1 &&
+          age > 20000
+        ) {
+          this.skipped.add(this.remoteId);
+          this.dropPeer();
+          this.opts.onEvent({
+            type: "status",
+            status: "waiting",
+            detail: "That viewer could not open a link. Waiting for another.",
+          });
+        } else if (age > 45000) {
+          this.skipped.add(this.remoteId);
+          this.dropPeer();
+          this.opts.onEvent({
+            type: "status",
+            status: "waiting",
+            detail: "That viewer didn't finish connecting. Waiting for another.",
+          });
+        }
       }
       const next = viewers.find((v) => !this.skipped.has(v.id));
       if (!this.remoteId && next) {
@@ -263,19 +288,22 @@ export class DeskLink {
     const pc = new RTCPeerConnection({ iceServers: defaultIceServers() });
     this.pc = pc;
     pc.onicecandidate = (event) => {
-      if (!event.candidate || !this.remoteId) return;
-      void this.signal(this.remoteId, "ice", event.candidate.toJSON()).catch(() => {});
+      if (!event.candidate) return;
+      this.outboundIce.push(event.candidate.toJSON());
+      void this.flushOutboundIce();
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "failed") {
-        this.opts.onEvent({ type: "status", status: "error", detail: "The secure link failed. Try again." });
-        if (this.opts.role === "viewer") this.stop();
-        else {
-          this.dropPeer();
-          this.opts.onEvent({ type: "status", status: "waiting", detail: "Link failed. Waiting for another viewer." });
-        }
+        this.onLinkFailed(pc);
+        return;
       }
       if (pc.connectionState === "connected") {
+        this.recovering = false;
+        this.iceRestarts = 0;
+        if (this.recoverTimer) {
+          clearTimeout(this.recoverTimer);
+          this.recoverTimer = null;
+        }
         void this.applyBitrate();
         window.setTimeout(() => void this.applyBitrate(), 400);
       }
@@ -450,6 +478,8 @@ export class DeskLink {
         offer.sdp = tuneVideoSdp(offer.sdp, PRESETS[this.preset].bitrate);
       }
       await pc.setLocalDescription(offer);
+      await this.waitForCandidates(pc);
+      if (this.closed || this.pc !== pc || this.remoteId !== remote) return;
       if (pc.localDescription) await this.signal(remote, "offer", pc.localDescription.toJSON());
     } catch {
       // The next negotiationneeded retries a lost offer.
@@ -475,6 +505,8 @@ export class DeskLink {
       await this.flushIce();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      await this.waitForCandidates(pc);
+      if (this.closed || this.pc !== pc) return;
       await this.signal(from, "answer", pc.localDescription?.toJSON());
       return;
     }
@@ -487,6 +519,99 @@ export class DeskLink {
     const candidate = payload as RTCIceCandidateInit;
     if (!pc.remoteDescription) this.pendingIce.push(candidate);
     else await pc.addIceCandidate(candidate).catch(() => {});
+  }
+
+  private onLinkFailed(pc: RTCPeerConnection) {
+    if (this.closed || this.pc !== pc || this.recovering) return;
+    if (this.iceRestarts < 1) {
+      this.iceRestarts += 1;
+      this.recovering = true;
+      this.pendingIce = [];
+      this.outboundIce = [];
+      this.opts.onEvent({
+        type: "status",
+        status: "connecting",
+        detail: "Direct path failed. Trying another route…",
+      });
+      if (this.opts.role === "host") void this.restartOffer(pc);
+      this.recoverTimer = setTimeout(() => {
+        this.recoverTimer = null;
+        if (this.closed || this.pc !== pc || pc.connectionState === "connected") return;
+        if (pc.connectionState === "connecting" || pc.iceConnectionState === "checking") {
+          this.recovering = false;
+          return;
+        }
+        this.recovering = false;
+        this.onLinkFailed(pc);
+      }, 15000);
+      return;
+    }
+    this.opts.onEvent({
+      type: "status",
+      status: "error",
+      detail:
+        "The secure link could not cross these two networks. On the sharing computer, wait until it says Waiting, then try Connect again.",
+    });
+    if (this.opts.role === "viewer") this.stop();
+    else {
+      if (this.remoteId) this.skipped.add(this.remoteId);
+      this.dropPeer();
+      this.opts.onEvent({
+        type: "status",
+        status: "waiting",
+        detail: "Link failed. Waiting for another viewer.",
+      });
+    }
+  }
+
+  private async restartOffer(pc: RTCPeerConnection) {
+    try {
+      if (pc.signalingState === "have-local-offer") {
+        await pc.setLocalDescription({ type: "rollback" }).catch(() => {});
+      }
+      if (this.closed || this.pc !== pc) return;
+      pc.restartIce();
+    } catch {
+      // The explicit offer below covers a restart the browser ignored.
+    }
+    window.setTimeout(() => {
+      if (this.closed || this.pc !== pc || this.makingOffer || pc.signalingState !== "stable") return;
+      void this.offer();
+    }, 400);
+  }
+
+  private async waitForCandidates(pc: RTCPeerConnection) {
+    if (pc.iceGatheringState === "complete") return;
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        pc.removeEventListener("icegatheringstatechange", onState);
+        window.clearTimeout(timer);
+        resolve();
+      };
+      const onState = () => {
+        if (pc.iceGatheringState === "complete") finish();
+      };
+      pc.addEventListener("icegatheringstatechange", onState);
+      const timer = window.setTimeout(finish, 2500);
+    });
+  }
+
+  private async flushOutboundIce() {
+    if (this.flushingIce || !this.remoteId || this.closed) return;
+    this.flushingIce = true;
+    try {
+      while (this.outboundIce.length && this.remoteId && !this.closed) {
+        const candidate = this.outboundIce[0];
+        try {
+          await this.signal(this.remoteId, "ice", candidate);
+          this.outboundIce.shift();
+        } catch {
+          break;
+        }
+      }
+    } finally {
+      this.flushingIce = false;
+    }
   }
 
   private async flushIce() {
@@ -554,10 +679,15 @@ export class DeskLink {
   }
 
   private dropPeer() {
+    if (this.recoverTimer) clearTimeout(this.recoverTimer);
+    this.recoverTimer = null;
+    this.recovering = false;
+    this.iceRestarts = 0;
     this.dc = null;
     this.videoSender = null;
     this.authed = false;
     this.pendingIce = [];
+    this.outboundIce = [];
     this.pc?.close();
     this.pc = null;
     this.remoteId = null;
