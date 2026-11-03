@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent as ReactKey, type PointerEvent as ReactPointer } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKey, type PointerEvent as ReactPointer } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PRESETS, groupId, type QualityPreset } from "@/lib/desk/types";
@@ -7,6 +7,12 @@ import { cn } from "@/lib/utils";
 import { SessionTools } from "./session-tools";
 
 type Viewer = ReturnType<typeof useViewerDesk>;
+
+function requestStageFullscreen(stage: HTMLElement) {
+  const legacy = stage as HTMLElement & { webkitRequestFullscreen?: () => void };
+  if (typeof stage.requestFullscreen === "function") return stage.requestFullscreen();
+  legacy.webkitRequestFullscreen?.();
+}
 
 function contentNorm(el: HTMLVideoElement | HTMLImageElement, clientX: number, clientY: number) {
   const rect = el.getBoundingClientRect();
@@ -35,6 +41,35 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
   const moveRaf = useRef(0);
   const pending = useRef<{ x: number; y: number } | null>(null);
   const live = viewer.status === "live";
+  const [full, setFull] = useState(false);
+
+  useEffect(() => {
+    const sync = () => {
+      const stage = viewer.stageRef.current;
+      setFull(Boolean(stage && document.fullscreenElement === stage));
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, [viewer.stageRef]);
+
+  useEffect(() => {
+    if (live || !document.fullscreenElement) return;
+    void document.exitFullscreen().catch(() => {});
+  }, [live]);
+
+  async function toggleFull() {
+    const stage = viewer.stageRef.current;
+    if (!stage) return;
+    try {
+      if (document.fullscreenElement === stage) await document.exitFullscreen();
+      else {
+        await requestStageFullscreen(stage);
+        stage.focus();
+      }
+    } catch {
+      // The browser refused fullscreen. The picture stays in the card.
+    }
+  }
 
   function sendPointer(kind: "move" | "down" | "up", event: ReactPointer<HTMLDivElement>) {
     const target = viewer.hasStream ? viewer.videoRef.current : viewer.frameRef.current;
@@ -58,6 +93,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
 
   function onKey(event: ReactKey<HTMLDivElement>) {
     if (!live) return;
+    if (event.key === "Escape" && document.fullscreenElement) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     event.preventDefault();
     viewer.sendInput({ kind: "key", key: event.key, down: event.type === "keydown" });
@@ -75,7 +111,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
           <div
             ref={viewer.stageRef}
             tabIndex={0}
-            className="relative aspect-video overflow-hidden rounded-sm bg-bg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg"
+            className="desk-stage relative aspect-video overflow-hidden rounded-sm bg-bg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg fullscreen:aspect-auto fullscreen:h-full fullscreen:w-full fullscreen:rounded-none fullscreen:bg-black"
             onPointerDown={(event) => {
               viewer.stageRef.current?.focus();
               event.currentTarget.setPointerCapture(event.pointerId);
@@ -105,7 +141,23 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
             {!viewer.hasStream && !viewer.frameUrl ? (
               <p className="absolute inset-0 grid place-items-center text-sm text-muted">Waiting for the picture…</p>
             ) : null}
+            {full ? (
+              <Button
+                className="absolute top-3 right-3 z-10"
+                onPointerDown={(event) => event.stopPropagation()}
+                onPointerUp={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void toggleFull();
+                }}
+              >
+                Exit full screen
+              </Button>
+            ) : null}
           </div>
+          <Button size="lg" className="w-full" onClick={() => void toggleFull()}>
+            Full screen
+          </Button>
           <div className="grid grid-cols-3 gap-2" role="group" aria-label="Picture quality">
             {(Object.keys(PRESETS) as QualityPreset[]).map((preset) => (
               <Button
