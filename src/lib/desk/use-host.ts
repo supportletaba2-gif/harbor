@@ -76,6 +76,7 @@ export function useHostDesk() {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [audit, setAudit] = useState<AuditLine[]>([]);
   const [pointerReady, setPointerReady] = useState(false);
+  const [bridge, setBridge] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<DeskLink | null>(null);
@@ -91,6 +92,7 @@ export function useHostDesk() {
   const pipeRef = useRef(new FilePipe());
   const machineRef = useRef(createMachine());
   const statusRef = useRef<LinkStatus>("idle");
+  const bridgeRef = useRef(false);
   const fileState = useRef(new Map<string, string>());
   const sendNoteRef = useRef<(text: string) => void>(() => {});
   const relayRef = useRef<(text: string) => void>(() => {});
@@ -189,6 +191,39 @@ export function useHostDesk() {
       window.clearInterval(timer);
     };
   }, [aim]);
+
+  useEffect(() => {
+    if (!bridge) return;
+    let stop = false;
+    const canvas = document.createElement("canvas");
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const pump = async () => {
+      while (!stop && bridgeRef.current) {
+        const started = performance.now();
+        try {
+          const source = await nextFrameSource(video, previewRef.current, surfaceRef.current, streamRef.current);
+          if (source && ctx) {
+            const jpeg = await encodeJpeg(canvas, ctx, source.el, source.w, source.h);
+            if (source.el instanceof ImageBitmap) source.el.close();
+            if (jpeg && !stop) linkRef.current?.postFrame(jpeg);
+          }
+        } catch {
+          // The next pass tries again. A missing picture is not fatal.
+        }
+        const wait = Math.max(40, 450 - (performance.now() - started));
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+      video.srcObject = null;
+    };
+    void pump();
+    return () => {
+      stop = true;
+      video.srcObject = null;
+    };
+  }, [bridge]);
 
   const noteActivity = useCallback((input: DeskInput, label: string) => {
     if (input.kind === "move") {
@@ -332,6 +367,8 @@ export function useHostDesk() {
     setRtt(null);
     setArmed(false);
     setMetrics(null);
+    bridgeRef.current = false;
+    setBridge(false);
     pipeRef.current.disarm();
   }, []);
 
@@ -434,6 +471,9 @@ export function useHostDesk() {
             const snapshot = machineRef.current.tick();
             setMetrics(snapshot);
             linkRef.current?.send({ t: "metrics", snapshot });
+          } else if (event.type === "bridge") {
+            bridgeRef.current = event.on;
+            setBridge(event.on);
           }
         },
       });
@@ -582,4 +622,73 @@ export function useHostDesk() {
     canStart: /^\d{9}$/.test(id) && /^\d{4,8}$/.test(pin) && (status === "idle" || status === "ended" || status === "error"),
     running: status !== "idle" && status !== "ended" && status !== "error",
   };
+}
+
+async function nextFrameSource(
+  video: HTMLVideoElement,
+  preview: HTMLVideoElement | null,
+  surface: HTMLCanvasElement | null,
+  stream: MediaStream | null,
+): Promise<{ el: CanvasImageSource; w: number; h: number } | null> {
+  if (preview && preview.readyState >= 2 && preview.videoWidth > 0) {
+    return { el: preview, w: preview.videoWidth, h: preview.videoHeight };
+  }
+  if (surface && surface.width > 0 && surface.height > 0) {
+    return { el: surface, w: surface.width, h: surface.height };
+  }
+  const track = stream?.getVideoTracks()[0];
+  if (track && typeof ImageCapture !== "undefined") {
+    try {
+      const capture = new ImageCapture(track) as ImageCapture & { grabFrame?: () => Promise<ImageBitmap> };
+      if (capture.grabFrame) {
+        const bitmap = await capture.grabFrame();
+        return { el: bitmap, w: bitmap.width, h: bitmap.height };
+      }
+    } catch {
+      // The video element below is the fallback when a frame is not ready.
+    }
+  }
+  if (stream && video.srcObject !== stream) {
+    video.srcObject = stream;
+    void video.play().catch(() => {});
+  }
+  if (video.readyState >= 2 && video.videoWidth > 0) {
+    return { el: video, w: video.videoWidth, h: video.videoHeight };
+  }
+  return null;
+}
+
+async function encodeJpeg(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sw: number,
+  sh: number,
+): Promise<string | null> {
+  let width = Math.min(960, sw);
+  let quality = 0.5;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const w = Math.max(2, Math.round(width));
+    const h = Math.max(2, Math.round((sh * w) / sw));
+    canvas.width = w;
+    canvas.height = h;
+    ctx.drawImage(source, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    if (!blob) return null;
+    const encoded = bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
+    if (encoded.startsWith("/9j/") && encoded.length <= 100_000 && blob.size <= 72_000) return encoded;
+    width = Math.max(320, Math.round(width * 0.72));
+    quality = Math.max(0.32, quality - 0.08);
+  }
+  return null;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    const slice = bytes.subarray(i, Math.min(bytes.length, i + step));
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
 }

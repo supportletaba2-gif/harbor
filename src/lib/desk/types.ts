@@ -74,7 +74,9 @@ export type DeskLinkEvent =
   | { type: "clip"; from: "host" | "viewer"; text: string }
   | { type: "note"; text: string }
   | { type: "metrics"; snapshot: MachineSnapshot }
-  | { type: "kill"; pid: number };
+  | { type: "kill"; pid: number }
+  | { type: "bridge"; on: boolean }
+  | { type: "frame"; jpeg: string };
 
 export const PRESETS: Record<
   QualityPreset,

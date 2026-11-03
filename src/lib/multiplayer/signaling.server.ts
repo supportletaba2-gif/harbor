@@ -17,7 +17,7 @@ const signalSchema = z.object({
   room: ID,
   from: ID,
   to: ID,
-  kind: z.enum(["offer", "answer", "ice"]),
+  kind: z.enum(["offer", "answer", "ice", "ctrl"]),
   payload: z.unknown().refine((v) => v !== undefined && JSON.stringify(v).length <= 32_768, {
     message: "payload too large",
   }),
@@ -29,20 +29,22 @@ const PEER_TTL_SECONDS = 30;
 const SIGNAL_TTL_SECONDS = 60;
 
 const globalRef = globalThis as typeof globalThis & {
-  __rtcSchemaPromise__?: Promise<void>;
+  __rtcSchemaPromiseV2__?: Promise<void>;
 };
 
 function ensureSchema(sql: Sql): Promise<void> {
-  globalRef.__rtcSchemaPromise__ ??= (async () => {
+  globalRef.__rtcSchemaPromiseV2__ ??= (async () => {
     await sql.query(
       `CREATE TABLE IF NOT EXISTS webrtc_peers (
          room TEXT NOT NULL,
          peer_id TEXT NOT NULL,
          name TEXT NOT NULL DEFAULT '',
          last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+         secret TEXT,
          PRIMARY KEY (room, peer_id)
        )`,
     );
+    await sql.query(`ALTER TABLE webrtc_peers ADD COLUMN IF NOT EXISTS secret TEXT`);
     await sql.query(
       `CREATE TABLE IF NOT EXISTS webrtc_signals (
          id BIGSERIAL PRIMARY KEY,
@@ -59,10 +61,10 @@ function ensureSchema(sql: Sql): Promise<void> {
          ON webrtc_signals (room, to_peer, id)`,
     );
   })().catch((err) => {
-    globalRef.__rtcSchemaPromise__ = undefined;
+    globalRef.__rtcSchemaPromiseV2__ = undefined;
     throw err;
   });
-  return globalRef.__rtcSchemaPromise__;
+  return globalRef.__rtcSchemaPromiseV2__;
 }
 
 async function roster(sql: Sql, room: string): Promise<PeerRow[]> {
@@ -75,13 +77,14 @@ async function roster(sql: Sql, room: string): Promise<PeerRow[]> {
   return rows.map((r) => ({ id: r.peer_id, name: r.name }));
 }
 
-async function touchPeer(sql: Sql, room: string, peer: string, name: string) {
+async function touchPeer(sql: Sql, room: string, peer: string, name: string, key: string | null) {
   await sql.query(
-    `INSERT INTO webrtc_peers (room, peer_id, name, last_seen)
-     VALUES ($1, $2, $3, now())
+    `INSERT INTO webrtc_peers (room, peer_id, name, last_seen, secret)
+     VALUES ($1, $2, $3, now(), $4)
      ON CONFLICT (room, peer_id)
-     DO UPDATE SET last_seen = now(), name = EXCLUDED.name`,
-    [room, peer, name],
+     DO UPDATE SET last_seen = now(), name = EXCLUDED.name,
+       secret = COALESCE(webrtc_peers.secret, EXCLUDED.secret)`,
+    [room, peer, name, key],
   );
 }
 
@@ -134,7 +137,8 @@ async function handleProbe(): Promise<Response> {
 }
 
 /** GET /api/rtc?room&peer&name&since — join (since=0), heartbeat, and inbox. */
-async function handleGet(url: URL): Promise<Response> {
+async function handleGet(request: Request): Promise<Response> {
+  const url = new URL(request.url);
   const parsed = z
     .object({
       room: ID,
@@ -152,11 +156,13 @@ async function handleGet(url: URL): Promise<Response> {
   const blocked = sharedStore();
   if (blocked) return blocked;
   const { room, peer, name, since } = parsed.data;
+  const keyRaw = request.headers.get("x-harbor-key") ?? "";
+  const key = ID.safeParse(keyRaw).success ? keyRaw : null;
 
   const sql = await getSql();
   await ensureSchema(sql);
   if (since === 0 || Math.random() < 0.02) await prune(sql);
-  await touchPeer(sql, room, peer, name);
+  await touchPeer(sql, room, peer, name, key);
   const rows = await sql.query<{
     id: number;
     from_peer: string;
@@ -212,7 +218,7 @@ export async function handleSignaling(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     if (request.method === "GET" && url.searchParams.get("probe") === "1") return await handleProbe();
-    if (request.method === "GET") return await handleGet(url);
+    if (request.method === "GET") return await handleGet(request);
     if (request.method === "POST") return await handlePost(request);
     return json({ error: "method not allowed" }, 405);
   } catch (error) {

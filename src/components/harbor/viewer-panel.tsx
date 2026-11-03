@@ -8,10 +8,10 @@ import { SessionTools } from "./session-tools";
 
 type Viewer = ReturnType<typeof useViewerDesk>;
 
-function contentNorm(video: HTMLVideoElement, clientX: number, clientY: number) {
-  const rect = video.getBoundingClientRect();
-  const frameW = video.videoWidth || 16;
-  const frameH = video.videoHeight || 9;
+function contentNorm(el: HTMLVideoElement | HTMLImageElement, clientX: number, clientY: number) {
+  const rect = el.getBoundingClientRect();
+  const frameW = el instanceof HTMLVideoElement ? el.videoWidth || 16 : el.naturalWidth || 16;
+  const frameH = el instanceof HTMLVideoElement ? el.videoHeight || 9 : el.naturalHeight || 9;
   const elementRatio = rect.width / rect.height;
   const frameRatio = frameW / frameH;
   let width = rect.width;
@@ -37,9 +37,11 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
   const live = viewer.status === "live";
 
   function sendPointer(kind: "move" | "down" | "up", event: ReactPointer<HTMLDivElement>) {
-    const video = viewer.videoRef.current;
-    if (!video) return;
-    const point = contentNorm(video, event.clientX, event.clientY);
+    const target = viewer.hasStream ? viewer.videoRef.current : viewer.frameRef.current;
+    if (!target) return;
+    const ready = target instanceof HTMLVideoElement ? target.videoWidth > 0 : target.naturalWidth > 0;
+    if (!ready) return;
+    const point = contentNorm(target, event.clientX, event.clientY);
     if (point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) return;
     if (kind === "move") {
       pending.current = point;
@@ -90,8 +92,17 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
             onKeyDown={onKey}
             onKeyUp={onKey}
           >
-            <video ref={viewer.videoRef} autoPlay muted playsInline className="h-full w-full cursor-none object-contain" />
-            {!viewer.hasStream ? (
+            <video
+              ref={viewer.videoRef}
+              autoPlay
+              muted
+              playsInline
+              className={cn("h-full w-full cursor-none object-contain", viewer.hasStream ? "block" : "hidden")}
+            />
+            {viewer.frameUrl && !viewer.hasStream ? (
+              <img ref={viewer.frameRef} src={viewer.frameUrl} alt="" className="h-full w-full cursor-none object-contain" />
+            ) : null}
+            {!viewer.hasStream && !viewer.frameUrl ? (
               <p className="absolute inset-0 grid place-items-center text-sm text-muted">Waiting for the picture…</p>
             ) : null}
           </div>
@@ -112,6 +123,9 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
             {viewer.fps !== null ? ` · ${viewer.fps} fps` : ""}
             {viewer.source === "display" ? " · live display" : ""}
           </p>
+          {viewer.frameUrl && !viewer.hasStream ? (
+            <p className="text-sm text-muted">A few frames a second until a direct link opens. Files need that direct link.</p>
+          ) : null}
           <p className="text-sm text-muted">
             {viewer.aim === "page"
               ? "This pointer moves a cursor on the host page and clicks what is under it."

@@ -23,6 +23,7 @@ export function useViewerDesk() {
   const [rtt, setRtt] = useState<number | null>(null);
   const [fps, setFps] = useState<number | null>(null);
   const [hasStream, setHasStream] = useState(false);
+  const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [files, setFiles] = useState<Transfer[]>([]);
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [clip, setClip] = useState("");
@@ -30,6 +31,7 @@ export function useViewerDesk() {
   const [aim, setAimState] = useState<Aim>("desk");
   const [audit, setAudit] = useState<AuditLine[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const frameRef = useRef<HTMLImageElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const linkRef = useRef<DeskLink | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -66,7 +68,22 @@ export function useViewerDesk() {
       video.srcObject = stream;
       void video.play().catch(() => {});
     }
-  }, [status, hasStream]);
+    let stop = false;
+    const watch = () => {
+      if (stop) return;
+      const el = videoRef.current;
+      if (el && el.videoWidth > 0) {
+        setHasStream(true);
+        return;
+      }
+      requestAnimationFrame(watch);
+    };
+    if (video && video.videoWidth > 0) setHasStream(true);
+    else requestAnimationFrame(watch);
+    return () => {
+      stop = true;
+    };
+  }, [status]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -97,6 +114,7 @@ export function useViewerDesk() {
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setHasStream(false);
+    setFrameUrl(null);
     setFps(null);
   }, []);
 
@@ -161,7 +179,9 @@ export function useViewerDesk() {
             video.srcObject = event.stream;
             void video.play().catch(() => {});
           }
-          setHasStream(true);
+          setHasStream(Boolean(video && video.videoWidth > 0));
+        } else if (event.type === "frame") {
+          setFrameUrl(event.jpeg);
         } else if (event.type === "source") {
           setSource(event.kind);
         } else if (event.type === "rtt") {
@@ -258,6 +278,7 @@ export function useViewerDesk() {
     rtt,
     fps,
     hasStream,
+    frameUrl,
     files,
     chat,
     clip,
@@ -271,6 +292,7 @@ export function useViewerDesk() {
     setAim,
     endProcess,
     videoRef,
+    frameRef,
     stageRef,
     connect,
     disconnect,

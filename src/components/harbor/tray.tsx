@@ -43,7 +43,7 @@ export function Tray({ host }: { host: Host }) {
           {host.aim === "windows" ? "Windows pointer on" : "Arm Windows pointer"}
         </Button>
         <p className="text-sm text-muted">
-          Picture and input use a peer-to-peer link. The PIN is checked there before any video is sent. The server only sees the setup messages.
+          The PIN is checked on the sharing computer before any control is allowed. A direct link carries full-rate video when the networks allow it. Otherwise the screen comes through Harbor.
         </p>
         <p className="text-sm text-muted">
           {host.aim === "windows"

@@ -139,7 +139,7 @@ export class FilePipe {
         direction: "out",
         received: 0,
         status: "failed",
-        error: "Connect first, then send the file.",
+        error: this.armed ? "Files need a direct link." : "Connect first, then send the file.",
       });
       return;
     }

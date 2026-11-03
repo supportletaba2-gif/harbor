@@ -1,14 +1,11 @@
 /**
  * 1:1 remote desk.
  *
- * Signaling (offer / answer / ICE) is only the handshake, relayed at /api/rtc.
- * After that, media and input stay on the peer connection:
- *   - one video track, host → viewer
- *   - one reliable data channel, "control", for the PIN check, quality, and input
- *
- * The PIN travels only on that encrypted channel, and only after it is accepted
- * does the host add the picture. A second channel, "files", carries file bytes.
- * OS mouse injection is not this class's job — it delivers normalized events to the host.
+ * Signaling (offer / answer / ICE / control) is relayed at /api/rtc.
+ * A direct peer connection carries full-rate video when a path exists.
+ * When it does not, the same control messages and a JPEG of the screen
+ * cross through Harbor, which both computers can already reach.
+ * The PIN is checked only on the host. OS mouse injection is not this class's job.
  */
 import { defaultIceServers } from "@/lib/multiplayer";
 import {
@@ -81,12 +78,24 @@ export class DeskLink {
   private iceRestarts = 0;
   private recovering = false;
   private recoverTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly key: string;
+  private direct = false;
+  private authedAt = 0;
+  private frameWaitFrom = 0;
+  private gotFrame = false;
+  private frameSince = 0;
+  private frameSeq = 0;
+  private frameBusy = false;
+  private lastAuth = 0;
+  private pendingMove: ControlMsg | null = null;
+  private moveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly skipped = new Set<string>();
   private readonly startedAt = Date.now();
 
   constructor(opts: DeskLinkOptions) {
     this.opts = opts;
     this.peerId = peerToken(opts.role === "host" ? "h" : "v");
+    this.key = makeKey();
   }
 
   start() {
@@ -98,17 +107,20 @@ export class DeskLink {
     void this.tick();
   }
 
-  /** Full teardown. Sends bye when the channel is still open. */
+  /** Full teardown. Sends bye when a peer is still known. */
   stop() {
     if (this.closed) return;
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
     this.send({ t: "bye" });
+    const peer = this.peerId;
+    const room = this.opts.room;
+    const key = this.key;
     this.dropPeer();
     void fetch("/api/rtc", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "leave", room: this.opts.room, peer: this.peerId }),
+      headers: { "content-type": "application/json", "x-harbor-key": key },
+      body: JSON.stringify({ op: "leave", room, peer }),
       keepalive: true,
     }).catch(() => {});
   }
@@ -120,7 +132,46 @@ export class DeskLink {
       } catch {
         // Channel closed between the readyState check and the write.
       }
+      return;
     }
+    if (!this.remoteId || (this.closed && msg.t !== "bye")) return;
+    if (msg.t === "input" && msg.input.kind === "move") {
+      this.pendingMove = msg;
+      if (this.moveTimer) return;
+      this.moveTimer = setTimeout(() => {
+        this.moveTimer = null;
+        const next = this.pendingMove;
+        this.pendingMove = null;
+        if (next) this.relay(next);
+      }, 80);
+      return;
+    }
+    this.relay(msg);
+  }
+
+  /** Latest JPEG, raw base64 starting with /9j/. Ignored once a direct link is up. */
+  postFrame(jpeg: string) {
+    if (this.closed || !this.authed || !this.remoteId || this.direct || this.frameBusy) return;
+    if (!jpeg.startsWith("/9j/") || jpeg.length > 100_000) return;
+    const seq = ++this.frameSeq;
+    const viewer = this.remoteId;
+    this.frameBusy = true;
+    void fetch("/api/bridge", {
+      method: "POST",
+      headers: this.headers(true),
+      body: JSON.stringify({
+        op: "frame",
+        room: this.opts.room,
+        peer: this.peerId,
+        viewer,
+        seq,
+        jpeg,
+      }),
+    })
+      .catch(() => {})
+      .finally(() => {
+        this.frameBusy = false;
+      });
   }
 
   async setStream(stream: MediaStream) {
@@ -151,12 +202,32 @@ export class DeskLink {
       }
     }
     if (this.closed) return;
+    if (this.opts.role === "viewer" && this.remoteId && !this.authed && Date.now() - this.lastAuth >= 1200) {
+      this.lastAuth = Date.now();
+      this.send({ t: "auth", pin: this.opts.pin });
+    }
+    if (this.opts.role === "viewer" && this.authed && !this.direct) await this.pullFrame();
+    if (this.closed) return;
     if (this.failures === 0) this.watchTimeouts();
-    this.timer = setTimeout(() => void this.tick(), this.authed ? 1600 : 400);
+    const wait = this.authed && !this.direct ? 250 : this.authed ? 1200 : 400;
+    this.timer = setTimeout(() => void this.tick(), wait);
   }
 
   private watchTimeouts() {
-    if (this.opts.role !== "viewer" || this.authed || this.closed) return;
+    if (this.closed) return;
+    if (this.opts.role === "viewer" && this.authed && !this.direct && !this.gotFrame) {
+      const since = this.frameWaitFrom || this.authedAt;
+      if (since && Date.now() - since > 20000) {
+        this.opts.onEvent({
+          type: "status",
+          status: "error",
+          detail: "The picture could not be delivered. Try Connect again.",
+        });
+        this.stop();
+        return;
+      }
+    }
+    if (this.opts.role !== "viewer" || this.authed) return;
     const elapsed = Date.now() - this.startedAt;
     if (!this.sawHost && elapsed > 8000 && elapsed < 45000) {
       this.opts.onEvent({
@@ -188,7 +259,7 @@ export class DeskLink {
       name: this.opts.role,
       since: String(this.cursor),
     });
-    const res = await fetch(`/api/rtc?${params}`);
+    const res = await fetch(`/api/rtc?${params}`, { headers: this.headers() });
     if (this.closed) return;
     if (!res.ok) {
       let reason = `signaling ${res.status}`;
@@ -202,7 +273,7 @@ export class DeskLink {
     }
     const body = (await res.json()) as {
       peers: { id: string; name: string }[];
-      signals: { id: number; from: string; kind: "offer" | "answer" | "ice"; payload: unknown }[];
+      signals: { id: number; from: string; kind: "offer" | "answer" | "ice" | "ctrl"; payload: unknown }[];
     };
     if (this.closed) return;
     const peers = body.peers.filter((p) => p.id !== this.peerId);
@@ -278,6 +349,10 @@ export class DeskLink {
       this.remoteId = host.id;
       this.ensurePc(false);
       this.opts.onEvent({ type: "status", status: "connecting", detail: "Desk found. Connecting…" });
+      if (!this.authed) {
+        this.lastAuth = Date.now();
+        this.send({ t: "auth", pin: this.opts.pin });
+      }
     } else if (!host) {
       this.opts.onEvent({ type: "status", status: "waiting", detail: "Looking for that desk…" });
     }
@@ -304,8 +379,21 @@ export class DeskLink {
           clearTimeout(this.recoverTimer);
           this.recoverTimer = null;
         }
+        const becameDirect = !this.direct;
+        this.direct = true;
         void this.applyBitrate();
         window.setTimeout(() => void this.applyBitrate(), 400);
+        if (this.authed && becameDirect) {
+          this.opts.onEvent({ type: "bridge", on: false });
+          this.opts.onEvent({
+            type: "status",
+            status: "live",
+            detail:
+              this.opts.role === "host"
+                ? "Connected. Remote input is on."
+                : "Connected. You are controlling the desk.",
+          });
+        }
       }
     };
     pc.ontrack = (event) => {
@@ -333,10 +421,9 @@ export class DeskLink {
     if (channel.label !== "control") return;
     this.dc = channel;
     channel.onopen = () => {
-      if (this.opts.role === "viewer") {
-        this.send({ t: "auth", pin: this.opts.pin });
-        this.opts.onEvent({ type: "status", status: "checking", detail: "Checking the PIN…" });
-      }
+      if (this.opts.role !== "viewer" || this.authed) return;
+      this.send({ t: "auth", pin: this.opts.pin });
+      this.opts.onEvent({ type: "status", status: "checking", detail: "Checking the PIN…" });
     };
     channel.onmessage = (event) => {
       if (typeof event.data !== "string") return;
@@ -361,12 +448,25 @@ export class DeskLink {
         }, 200);
         return;
       }
+      if (this.authed) {
+        this.send({ t: "auth-result", ok: true });
+        return;
+      }
       this.authed = true;
+      this.authedAt = Date.now();
       this.send({ t: "auth-result", ok: true });
       this.send({ t: "source", kind: this.opts.getSource?.() ?? "desk" });
       const stream = this.opts.getStream?.();
       if (stream) void this.publish(stream);
-      this.opts.onEvent({ type: "status", status: "live", detail: "Connected. Remote input is on." });
+      const directNow = this.pc?.connectionState === "connected";
+      this.direct = Boolean(directNow);
+      if (!directNow) this.frameWaitFrom = this.authedAt;
+      this.opts.onEvent({ type: "bridge", on: !directNow });
+      this.opts.onEvent({
+        type: "status",
+        status: "live",
+        detail: directNow ? "Connected. Remote input is on." : "Connected. The screen is coming through Harbor.",
+      });
       return;
     }
     if (msg.t === "auth-result" && this.opts.role === "viewer") {
@@ -375,9 +475,19 @@ export class DeskLink {
         this.stop();
         return;
       }
+      if (this.authed) return;
       this.authed = true;
+      this.authedAt = Date.now();
       this.send({ t: "quality", preset: this.preset });
-      this.opts.onEvent({ type: "status", status: "live", detail: "Connected. You are controlling the desk." });
+      const directNow = this.pc?.connectionState === "connected";
+      this.direct = Boolean(directNow);
+      if (!directNow) this.frameWaitFrom = this.authedAt;
+      this.opts.onEvent({ type: "bridge", on: !directNow });
+      this.opts.onEvent({
+        type: "status",
+        status: "live",
+        detail: directNow ? "Connected. You are controlling the desk." : "Connected. You are controlling the desk.",
+      });
       this.startPing();
       return;
     }
@@ -488,7 +598,14 @@ export class DeskLink {
     }
   }
 
-  private async onSignal(from: string, kind: "offer" | "answer" | "ice", payload: unknown) {
+  private async onSignal(from: string, kind: "offer" | "answer" | "ice" | "ctrl", payload: unknown) {
+    if (kind === "ctrl") {
+      if (this.opts.role === "host" && this.remoteId && from !== this.remoteId) return;
+      if (!this.remoteId) this.remoteId = from;
+      const msg = asControl(payload);
+      if (msg) this.onControl(msg);
+      return;
+    }
     if (this.opts.role === "host" && this.remoteId && from !== this.remoteId) return;
     if (!this.pc) {
       this.remoteId = from;
@@ -522,46 +639,37 @@ export class DeskLink {
   }
 
   private onLinkFailed(pc: RTCPeerConnection) {
-    if (this.closed || this.pc !== pc || this.recovering) return;
-    if (this.iceRestarts < 1) {
-      this.iceRestarts += 1;
-      this.recovering = true;
-      this.pendingIce = [];
-      this.outboundIce = [];
+    if (this.closed || this.pc !== pc) return;
+    const wasDirect = this.direct;
+    this.direct = false;
+    if (this.authed) {
+      this.frameWaitFrom = Date.now();
+      this.gotFrame = this.gotFrame && !wasDirect;
+      this.opts.onEvent({ type: "bridge", on: true });
+      if (wasDirect) {
+        this.opts.onEvent({
+          type: "status",
+          status: "live",
+          detail: "Direct path dropped. The screen is coming through Harbor.",
+        });
+      }
+    } else if (!this.recovering) {
       this.opts.onEvent({
         type: "status",
         status: "connecting",
         detail: "Direct path failed. Trying another route…",
       });
-      if (this.opts.role === "host") void this.restartOffer(pc);
-      this.recoverTimer = setTimeout(() => {
-        this.recoverTimer = null;
-        if (this.closed || this.pc !== pc || pc.connectionState === "connected") return;
-        if (pc.connectionState === "connecting" || pc.iceConnectionState === "checking") {
-          this.recovering = false;
-          return;
-        }
-        this.recovering = false;
-        this.onLinkFailed(pc);
-      }, 15000);
-      return;
     }
-    this.opts.onEvent({
-      type: "status",
-      status: "error",
-      detail:
-        "The secure link could not cross these two networks. On the sharing computer, wait until it says Waiting, then try Connect again.",
-    });
-    if (this.opts.role === "viewer") this.stop();
-    else {
-      if (this.remoteId) this.skipped.add(this.remoteId);
-      this.dropPeer();
-      this.opts.onEvent({
-        type: "status",
-        status: "waiting",
-        detail: "Link failed. Waiting for another viewer.",
-      });
-    }
+    if (this.iceRestarts >= 1 || this.recovering) return;
+    this.iceRestarts += 1;
+    this.recovering = true;
+    this.pendingIce = [];
+    this.outboundIce = [];
+    if (this.opts.role === "host") void this.restartOffer(pc);
+    this.recoverTimer = setTimeout(() => {
+      this.recoverTimer = null;
+      this.recovering = false;
+    }, 15000);
   }
 
   private async restartOffer(pc: RTCPeerConnection) {
@@ -651,14 +759,14 @@ export class DeskLink {
     }
   }
 
-  private async signal(to: string, kind: "offer" | "answer" | "ice", payload: unknown) {
+  private async signal(to: string, kind: "offer" | "answer" | "ice" | "ctrl", payload: unknown) {
     let last = "signal failed";
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (this.closed) return;
+      if (attempt > 0 && this.closed) return;
       try {
         const res = await fetch("/api/rtc", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: this.headers(true),
           body: JSON.stringify({
             op: "signal",
             room: this.opts.room,
@@ -679,6 +787,7 @@ export class DeskLink {
   }
 
   private dropPeer() {
+    const bridging = this.authed && !this.direct;
     if (this.recoverTimer) clearTimeout(this.recoverTimer);
     this.recoverTimer = null;
     this.recovering = false;
@@ -686,13 +795,77 @@ export class DeskLink {
     this.dc = null;
     this.videoSender = null;
     this.authed = false;
+    this.direct = false;
+    this.authedAt = 0;
+    this.frameWaitFrom = 0;
+    this.gotFrame = false;
+    this.frameSince = 0;
+    this.frameBusy = false;
+    this.pendingMove = null;
+    if (this.moveTimer) clearTimeout(this.moveTimer);
+    this.moveTimer = null;
     this.pendingIce = [];
     this.outboundIce = [];
     this.pc?.close();
     this.pc = null;
     this.remoteId = null;
+    if (bridging) this.opts.onEvent({ type: "bridge", on: false });
     this.opts.onEvent({ type: "stream", stream: null });
   }
+
+  private headers(json = false): HeadersInit {
+    const headers: Record<string, string> = { "x-harbor-key": this.key };
+    if (json) headers["content-type"] = "application/json";
+    return headers;
+  }
+
+  private relay(msg: ControlMsg) {
+    if (!this.remoteId) return;
+    if (this.closed && msg.t !== "bye") return;
+    const allowed = msg.t === "auth" || msg.t === "auth-result" || msg.t === "bye" || this.authed;
+    if (!allowed) return;
+    void this.signal(this.remoteId, "ctrl", msg).catch(() => {});
+  }
+
+  private async pullFrame() {
+    if (this.frameBusy || this.closed || !this.authed || this.direct) return;
+    this.frameBusy = true;
+    try {
+      const params = new URLSearchParams({
+        room: this.opts.room,
+        peer: this.peerId,
+        since: String(this.frameSince),
+      });
+      const res = await fetch(`/api/bridge?${params}`, { headers: this.headers() });
+      if (!res.ok || this.closed || this.direct) return;
+      const body = (await res.json()) as { seq?: unknown; jpeg?: unknown };
+      const seq = typeof body.seq === "number" ? body.seq : Number(body.seq);
+      if (!Number.isFinite(seq)) return;
+      if (typeof body.jpeg === "string" && body.jpeg.startsWith("/9j/")) {
+        this.frameSince = seq;
+        this.gotFrame = true;
+        this.opts.onEvent({ type: "frame", jpeg: `data:image/jpeg;base64,${body.jpeg}` });
+      }
+    } catch {
+      // The next tick asks again.
+    } finally {
+      this.frameBusy = false;
+    }
+  }
+}
+
+function asControl(payload: unknown): ControlMsg | null {
+  const value = unwrap(payload);
+  if (!value || typeof value !== "object") return null;
+  if (typeof (value as { t?: unknown }).t !== "string") return null;
+  return value as ControlMsg;
+}
+
+function makeKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return hex;
 }
 
 function unwrap(payload: unknown): unknown {
