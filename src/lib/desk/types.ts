@@ -53,6 +53,7 @@ export type ControlMsg =
   | { t: "input"; input: DeskInput }
   | { t: "source"; kind: DeskSource }
   | { t: "aim"; kind: Aim }
+  | { t: "pointer"; ok: boolean }
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
   | { t: "chat"; text: string }
@@ -69,6 +70,7 @@ export type DeskLinkEvent =
   | { type: "quality"; preset: QualityPreset }
   | { type: "source"; kind: DeskSource }
   | { type: "aim"; kind: Aim }
+  | { type: "pointer"; ok: boolean }
   | { type: "rtt"; ms: number }
   | { type: "chat"; from: "host" | "viewer"; text: string }
   | { type: "clip"; from: "host" | "viewer"; text: string }

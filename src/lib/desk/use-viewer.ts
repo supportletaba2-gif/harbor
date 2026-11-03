@@ -29,6 +29,7 @@ export function useViewerDesk() {
   const [clip, setClip] = useState("");
   const [metrics, setMetrics] = useState<MachineSnapshot | null>(null);
   const [aim, setAimState] = useState<Aim>("desk");
+  const [pointerOk, setPointerOk] = useState<boolean | null>(null);
   const [audit, setAudit] = useState<AuditLine[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const frameRef = useRef<HTMLImageElement>(null);
@@ -127,6 +128,7 @@ export function useViewerDesk() {
     setStatus("ended");
     setDetail("Disconnected.");
     setAimState("desk");
+    setPointerOk(null);
     rememberRef.current("Disconnected");
   }, [clearVideo]);
 
@@ -142,6 +144,7 @@ export function useViewerDesk() {
     setChat([]);
     setMetrics(null);
     setAudit([]);
+    setPointerOk(null);
     fileState.current.clear();
     const link = new DeskLink({
       role: "viewer",
@@ -192,6 +195,8 @@ export function useViewerDesk() {
           setClip(event.text);
         } else if (event.type === "aim") {
           setAimState(event.kind);
+        } else if (event.type === "pointer") {
+          setPointerOk(event.ok);
         } else if (event.type === "note") {
           rememberRef.current(event.text);
         } else if (event.type === "metrics") {
@@ -284,6 +289,7 @@ export function useViewerDesk() {
     clip,
     metrics,
     aim,
+    pointerOk,
     audit,
     sendFile,
     cancelFile,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { aimNote, pointerBody, screenPoint } from "./windows-pointer.ts";
+import { aimNote, letterboxNorm, pointerBody, screenPoint } from "./windows-pointer.ts";
 
 describe("windows pointer", () => {
   it("maps a normalized point onto a screen", () => {
@@ -19,5 +19,16 @@ describe("windows pointer", () => {
   it("names the pointer mode", () => {
     assert.equal(aimNote("windows"), "Windows pointer on");
     assert.equal(aimNote("desk"), "Pointer back on the desk");
+  });
+
+  it("maps a click through letterboxing, including a reloading frame", () => {
+    const wide = letterboxNorm({ left: 0, top: 0, width: 1600, height: 900 }, 16, 9, 800, 450);
+    assert.ok(Math.abs(wide.x - 0.5) < 0.001);
+    assert.ok(Math.abs(wide.y - 0.5) < 0.001);
+    const bars = letterboxNorm({ left: 0, top: 0, width: 1600, height: 400 }, 16, 9, 10, 200);
+    assert.ok(bars.x < 0);
+    const remembered = letterboxNorm({ left: 0, top: 0, width: 1280, height: 720 }, 0, 0, 640, 360);
+    assert.ok(Math.abs(remembered.x - 0.5) < 0.001);
+    assert.ok(Math.abs(remembered.y - 0.5) < 0.001);
   });
 });

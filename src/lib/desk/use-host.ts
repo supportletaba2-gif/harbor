@@ -5,7 +5,7 @@ import { FilePipe, type Transfer } from "./files";
 import { DeskLink } from "./link";
 import { createMachine } from "./machine";
 import { applyPageInput } from "./page-agent";
-import { aimNote, postWindowsPointer, windowsPointerReady } from "./windows-pointer";
+import { aimNote, armWindowsPointer, postWindowsPointer, windowsPointerReady, type PointerArm } from "./windows-pointer";
 import {
   makeId,
   makePin,
@@ -76,6 +76,7 @@ export function useHostDesk() {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [audit, setAudit] = useState<AuditLine[]>([]);
   const [pointerReady, setPointerReady] = useState(false);
+  const [armNote, setArmNote] = useState<PointerArm | "idle">("idle");
   const [bridge, setBridge] = useState(false);
   const previewRef = useRef<HTMLVideoElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
@@ -97,7 +98,19 @@ export function useHostDesk() {
   const sendNoteRef = useRef<(text: string) => void>(() => {});
   const relayRef = useRef<(text: string) => void>(() => {});
   const rememberRef = useRef<(text: string) => void>(() => {});
+  const pointerReadyRef = useRef(false);
+  const pointerSent = useRef<boolean | null>(null);
   statusRef.current = status;
+
+  const reportPointer = useCallback((ok: boolean) => {
+    if (pointerReadyRef.current !== ok) {
+      pointerReadyRef.current = ok;
+      setPointerReady(ok);
+    }
+    if (pointerSent.current === ok) return;
+    pointerSent.current = ok;
+    if (statusRef.current === "live") linkRef.current?.send({ t: "pointer", ok });
+  }, []);
 
   const mountCanvas = useCallback(() => {
     const slot = slotRef.current;
@@ -181,7 +194,9 @@ export function useHostDesk() {
     let stop = false;
     const probe = () => {
       void windowsPointerReady().then((ok) => {
-        if (!stop) setPointerReady(ok);
+        if (stop) return;
+        if (ok) setArmNote("ready");
+        reportPointer(ok);
       });
     };
     probe();
@@ -190,7 +205,7 @@ export function useHostDesk() {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [aim]);
+  }, [aim, reportPointer]);
 
   useEffect(() => {
     if (!bridge) return;
@@ -245,7 +260,11 @@ export function useHostDesk() {
         return;
       }
       if (aimRef.current === "windows") {
-        if (sourceRef.current === "display") postWindowsPointer(input);
+        if (sourceRef.current === "display") {
+          void postWindowsPointer(input).then((ok) => {
+            if (ok !== null) reportPointer(ok);
+          });
+        }
         noteActivity(input, input.kind === "key" ? `Key ${input.key}` : "Windows pointer");
         return;
       }
@@ -260,7 +279,7 @@ export function useHostDesk() {
       if (label === "Shell") setShell(modelRef.current.termLog.at(-1) ?? "");
       requestPaint();
     },
-    [noteActivity, requestPaint],
+    [noteActivity, reportPointer, requestPaint],
   );
 
   const publishStream = useCallback(async (stream: MediaStream, gen: number) => {
@@ -360,6 +379,9 @@ export function useHostDesk() {
     setAimState("desk");
     setCursor(null);
     setPointerReady(false);
+    pointerReadyRef.current = false;
+    pointerSent.current = null;
+    setArmNote("idle");
     rememberRef.current("Session ended");
     setSource(null);
     setStatus("ended");
@@ -385,14 +407,20 @@ export function useHostDesk() {
       fileState.current.clear();
       sourceRef.current = kind;
       setSource(kind);
-      const capture =
-        kind === "display"
-          ? navigator.mediaDevices.getDisplayMedia({
-              video: { frameRate: { ideal: 24, max: 30 } },
-              audio: false,
-            })
-          : null;
+      let capture: Promise<MediaStream> | null = null;
       if (kind === "display") {
+        void armWindowsPointer().then((result) => {
+          setArmNote(result);
+          reportPointer(result === "ready");
+        });
+        capture = navigator.mediaDevices.getDisplayMedia({
+          video: {
+            frameRate: { ideal: 24, max: 30 },
+            cursor: "always",
+            displaySurface: "monitor",
+          } as MediaTrackConstraints,
+          audio: false,
+        });
         aimRef.current = "windows";
         setAimState("windows");
         setArmed(false);
@@ -417,21 +445,25 @@ export function useHostDesk() {
         onFileChannel: (channel) => pipeRef.current.attach(channel),
         onEvent: (event) => {
           if (event.type === "status") {
-            if (event.status === "live" && statusRef.current !== "live") {
+            const previous = statusRef.current;
+            statusRef.current = event.status;
+            if (event.status === "live" && previous !== "live") {
               sendNoteRef.current("Viewer connected");
               if (sourceRef.current === "display") {
                 aimRef.current = "windows";
                 setAimState("windows");
                 linkRef.current?.send({ t: "aim", kind: "windows" });
+                linkRef.current?.send({ t: "pointer", ok: pointerReadyRef.current });
+                pointerSent.current = pointerReadyRef.current;
               }
             }
-            if (event.status === "waiting" && statusRef.current === "live") sendNoteRef.current("Viewer left");
+            if (event.status === "waiting" && previous === "live") sendNoteRef.current("Viewer left");
             if (event.status === "live") {
               pipeRef.current.arm();
               if (sourceRef.current === "desk") {
                 const snapshot = machineRef.current.tick();
                 setMetrics(snapshot);
-                if (statusRef.current !== "live") {
+                if (previous !== "live") {
                   const fresh = machineRef.current.drain();
                   if (fresh.length) fresh.forEach((line) => sendNoteRef.current(line));
                   else {
@@ -500,13 +532,17 @@ export function useHostDesk() {
         sourceRef.current = "desk";
         aimRef.current = "desk";
         setAimState("desk");
+        setPointerReady(false);
+        pointerReadyRef.current = false;
+        pointerSent.current = null;
+        setArmNote("idle");
         setSource(null);
         setStatus("idle");
         setArmed(false);
         setDetail("Display sharing was cancelled. Choose Share this display and allow the screen.");
       }
     },
-    [apply, applyQuality, end, id, pin],
+    [apply, applyQuality, end, id, pin, reportPointer],
   );
 
   const newId = useCallback(() => {
@@ -582,10 +618,22 @@ export function useHostDesk() {
     aimRef.current = kind;
     setAimState(kind);
     if (kind === "desk") setCursor(null);
-    if (kind !== "windows") setPointerReady(false);
+    if (kind !== "windows") {
+      pointerReadyRef.current = false;
+      pointerSent.current = null;
+      setPointerReady(false);
+      setArmNote("idle");
+    }
     if (statusRef.current === "live") linkRef.current?.send({ t: "aim", kind });
     sendNoteRef.current(aimNote(kind));
   }, []);
+
+  const allowPointer = useCallback(() => {
+    void armWindowsPointer().then((result) => {
+      setArmNote(result);
+      reportPointer(result === "ready");
+    });
+  }, [reportPointer]);
 
   return {
     id,
@@ -605,12 +653,14 @@ export function useHostDesk() {
     aim,
     cursor,
     pointerReady,
+    armNote,
     audit,
     sendFile,
     cancelFile,
     say,
     sendClip,
     setAim,
+    allowPointer,
     previewRef,
     slotRef,
     armed,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKey, type Point
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PRESETS, groupId, type QualityPreset } from "@/lib/desk/types";
+import { letterboxNorm } from "@/lib/desk/windows-pointer";
 import type { useViewerDesk } from "@/lib/desk/use-viewer";
 import { cn } from "@/lib/utils";
 import { SessionTools } from "./session-tools";
@@ -14,32 +15,10 @@ function requestStageFullscreen(stage: HTMLElement) {
   legacy.webkitRequestFullscreen?.();
 }
 
-function contentNorm(el: HTMLVideoElement | HTMLImageElement, clientX: number, clientY: number) {
-  const rect = el.getBoundingClientRect();
-  const frameW = el instanceof HTMLVideoElement ? el.videoWidth || 16 : el.naturalWidth || 16;
-  const frameH = el instanceof HTMLVideoElement ? el.videoHeight || 9 : el.naturalHeight || 9;
-  const elementRatio = rect.width / rect.height;
-  const frameRatio = frameW / frameH;
-  let width = rect.width;
-  let height = rect.height;
-  let left = rect.left;
-  let top = rect.top;
-  if (elementRatio > frameRatio) {
-    width = rect.height * frameRatio;
-    left = rect.left + (rect.width - width) / 2;
-  } else {
-    height = rect.width / frameRatio;
-    top = rect.top + (rect.height - height) / 2;
-  }
-  return {
-    x: (clientX - left) / width,
-    y: (clientY - top) / height,
-  };
-}
-
 export function ViewerPanel({ viewer }: { viewer: Viewer }) {
   const moveRaf = useRef(0);
   const pending = useRef<{ x: number; y: number } | null>(null);
+  const aspect = useRef({ w: 16, h: 9 });
   const live = viewer.status === "live";
   const [full, setFull] = useState(false);
 
@@ -72,11 +51,13 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
   }
 
   function sendPointer(kind: "move" | "down" | "up", event: ReactPointer<HTMLDivElement>) {
-    const target = viewer.hasStream ? viewer.videoRef.current : viewer.frameRef.current;
-    if (!target) return;
-    const ready = target instanceof HTMLVideoElement ? target.videoWidth > 0 : target.naturalWidth > 0;
-    if (!ready) return;
-    const point = contentNorm(target, event.clientX, event.clientY);
+    const stage = viewer.stageRef.current;
+    if (!stage) return;
+    const media = viewer.hasStream ? viewer.videoRef.current : viewer.frameRef.current;
+    const frameW = media instanceof HTMLVideoElement ? media.videoWidth : (media?.naturalWidth ?? 0);
+    const frameH = media instanceof HTMLVideoElement ? media.videoHeight : (media?.naturalHeight ?? 0);
+    if (frameW > 8 && frameH > 8) aspect.current = { w: frameW, h: frameH };
+    const point = letterboxNorm(stage.getBoundingClientRect(), aspect.current.w, aspect.current.h, event.clientX, event.clientY);
     if (point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) return;
     if (kind === "move") {
       pending.current = point;
@@ -111,7 +92,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
           <div
             ref={viewer.stageRef}
             tabIndex={0}
-            className="desk-stage relative aspect-video overflow-hidden rounded-sm bg-bg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg fullscreen:aspect-auto fullscreen:h-full fullscreen:w-full fullscreen:rounded-none fullscreen:bg-black"
+            className="desk-stage relative aspect-video cursor-none overflow-hidden rounded-sm bg-bg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg fullscreen:aspect-auto fullscreen:h-full fullscreen:w-full fullscreen:rounded-none fullscreen:bg-black"
             onPointerDown={(event) => {
               viewer.stageRef.current?.focus();
               event.currentTarget.setPointerCapture(event.pointerId);
@@ -178,12 +159,16 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
           {viewer.frameUrl && !viewer.hasStream ? (
             <p className="text-sm text-muted">A few frames a second until a direct link opens. Files need that direct link.</p>
           ) : null}
-          <p className="text-sm text-muted">
+          <p className="text-sm text-muted" data-pointer={viewer.pointerOk === null ? "unknown" : viewer.pointerOk ? "ready" : "waiting"}>
             {viewer.aim === "page"
               ? "This pointer moves a cursor on the host page and clicks what is under it."
-              : viewer.aim === "windows"
-                ? "This pointer moves the Windows cursor on the host PC. The host must be sharing the entire screen, with the Harbor tray running."
-                : "The Windows pointer moves the mouse on the shared PC. Share the entire screen, with the Harbor tray running."}
+              : viewer.aim === "windows" && viewer.pointerOk === false
+                ? "The mouse is waiting. On the shared PC, click Allow the pointer and choose Allow. The Harbor tray must be running."
+                : viewer.aim === "windows" && viewer.pointerOk === true
+                  ? "The Windows pointer is live. Move and click on the picture."
+                  : viewer.aim === "windows"
+                    ? "This pointer moves the Windows cursor on the host PC. The host must be sharing the entire screen, with the Harbor tray running."
+                    : "The Windows pointer moves the mouse on the shared PC. Share the entire screen, with the Harbor tray running."}
           </p>
           <Button variant={viewer.aim === "page" ? "primary" : "quiet"} className="w-full" onClick={() => viewer.setAim(viewer.aim === "page" ? "desk" : "page")}>
             {viewer.aim === "page" ? "Page mouse on" : "Control this page"}

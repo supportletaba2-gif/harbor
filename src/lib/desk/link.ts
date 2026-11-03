@@ -510,6 +510,10 @@ export class DeskLink {
       this.opts.onEvent({ type: "aim", kind: msg.kind });
       return;
     }
+    if (msg.t === "pointer" && this.opts.role === "viewer" && typeof msg.ok === "boolean") {
+      this.opts.onEvent({ type: "pointer", ok: msg.ok });
+      return;
+    }
     if (msg.t === "chat") {
       const text = typeof msg.text === "string" ? msg.text.trim().slice(0, 400) : "";
       if (!text) return;

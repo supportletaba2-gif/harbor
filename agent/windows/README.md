@@ -25,16 +25,18 @@ Files go to `%LOCALAPPDATA%\Harbor`. A Harbor shortcut is added to this user's S
 
 If Windows asks about local network access for the site, allow it. That is the browser reaching the tray on this same PC.
 
-## 3. Share the screen and arm the pointer
+## 3. Share the screen and allow the pointer
 
-1. On the Windows PC, choose **Share this display**, then the entire screen. Leave that tab open. Write down the ID and PIN.
-2. On the other computer, open https://delta-quartz-kite-jolly.grok.me. Enter that ID and PIN. Choose **Connect**. Do not choose **Use the desk on this page**.
-3. On either side, choose **Windows pointer** or **Arm Windows pointer**. The host page should say the tray has the pointer.
+1. On the Windows PC, the tray opens the desk. Click **Allow the pointer** and choose **Allow** when Chrome asks to connect to a device on the local network. The page should then say the tray has the pointer. If it says the tray is not running, start Harbor from the Startup shortcut and click Allow the pointer again.
+2. Choose **Share this display**, then the entire screen (not a window). Leave that tab open. Wait until it says Waiting. Copy that ID and PIN.
+3. On the other computer, open https://delta-quartz-kite-jolly.grok.me. Enter that ID and PIN. Choose **Connect**. Do not choose **Control this page**.
 4. On the other computer, click and drag on the picture. The Windows cursor should follow. A click lands where the cursor is. Letters, Enter, Backspace, Tab, Escape, and the arrow keys type into the focused Windows window.
 
-If the host still says the tray is not answering, the tray is quit, the port is busy, or the browser blocked local access. Re-open Harbor from the Startup shortcut and allow access for the site.
+If the other computer says the mouse is waiting, the Allow prompt was missed. On the shared PC, click **Allow the pointer** again and choose Allow. A probe that runs by itself never shows that prompt, so the cursor does nothing until this click.
 
-The practice desk does not move the Windows cursor. Share the entire screen first, or the picture and the cursor will not match.
+Share the entire screen. A window or a browser tab will not line up with the Windows cursor.
+
+After a tray update, run the update command again so this PC is running the new script. The site itself changes only after you publish from Grok.
 
 ## Remove it
 

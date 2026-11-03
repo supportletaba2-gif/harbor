@@ -25,7 +25,7 @@ export function Roadmap() {
         ))}
       </ol>
       <p className="max-w-xl text-sm text-muted">
-        Arm the Windows pointer after the Harbor tray is installed on that PC and the entire screen is shared. Until then, the page mouse only clicks this page.
+        On the shared PC, click Allow the pointer and choose Allow. The Harbor tray must be running, and the share must be the entire screen. Until then the other computer can see the screen but cannot move the mouse.
       </p>
     </section>
   );

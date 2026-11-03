@@ -53,7 +53,7 @@ export function HostPanel({ host }: { host: Host }) {
         </p>
       </header>
 
-      <div className="relative aspect-video overflow-hidden rounded-sm bg-desk">
+      <div className="relative h-36 overflow-hidden rounded-sm bg-desk">
         <div
           ref={host.slotRef}
           className={cn("absolute inset-0 touch-none", host.source === "display" && "hidden")}
@@ -107,9 +107,6 @@ export function HostPanel({ host }: { host: Host }) {
           Copy ID
         </Button>
       </div>
-      {!host.running ? (
-        <p className="text-sm text-muted">Share this display first. Copy the ID only after this says Waiting.</p>
-      ) : null}
 
       <form
         className="flex flex-col gap-3"
@@ -138,6 +135,23 @@ export function HostPanel({ host }: { host: Host }) {
             Copy PIN
           </Button>
         </div>
+        <Button
+          variant={host.pointerReady ? "quiet" : "primary"}
+          size="lg"
+          className="w-full"
+          onClick={() => host.allowPointer()}
+        >
+          {host.pointerReady ? "Pointer allowed" : "Allow the pointer"}
+        </Button>
+        <p className="text-sm text-muted">
+          {host.pointerReady
+            ? "This PC can move the Windows mouse. Share the entire screen next."
+            : host.armNote === "down"
+              ? "The Harbor tray is not running. Install it, then click Allow the pointer."
+              : host.armNote === "blocked"
+                ? "Chrome blocked the pointer. Click Allow the pointer and choose Allow."
+                : "Click Allow the pointer and choose Allow. Then share the entire screen."}
+        </p>
         {host.running ? (
           <Button variant="danger" size="lg" className="w-full" onClick={host.end}>
             End session
@@ -159,7 +173,7 @@ export function HostPanel({ host }: { host: Host }) {
       </p>
       {host.source === "display" ? (
         <p className="text-sm text-muted">
-          The whole screen is shared and the Windows pointer is armed. Allow local access if the browser asks, so the tray can move the mouse.
+          The whole screen is shared. Click Allow the pointer and choose Allow, or the other computer can see this screen but cannot move the mouse.
         </p>
       ) : null}
       <Tray host={host} />

@@ -38,4 +38,5 @@ Start-Process -FilePath $link.TargetPath -ArgumentList $link.Arguments -WorkingD
 Write-Host "Installed for this user: $dest"
 Write-Host "Opens: $DeskUrl"
 Write-Host "Starts again at sign-in. Quit it from the tray icon."
-Write-Host "This tray does not move the Windows pointer."
+Write-Host "This tray moves the Windows pointer while it is running."
+Write-Host "On the desk, click Allow the pointer and choose Allow. Then share the entire screen."

@@ -48,8 +48,12 @@ export function Tray({ host }: { host: Host }) {
         <p className="text-sm text-muted">
           {host.aim === "windows"
             ? host.pointerReady
-              ? "The tray on this PC has the pointer. Share the entire screen so the picture matches the cursor."
-              : "The tray is not answering on this PC. Install it, then allow local network access when the browser asks."
+              ? "The tray on this PC has the pointer. Move and click on the other computer's picture."
+              : host.armNote === "down"
+                ? "Chrome can reach this PC, but the Harbor tray is not running. Install it, then click Allow the pointer."
+                : host.armNote === "blocked"
+                  ? "Chrome blocked the pointer. Click Allow the pointer and choose Allow."
+                  : "Click Allow the pointer and choose Allow. That is what lets this page move the Windows mouse."
             : "The page mouse clicks this page. The Windows pointer needs the Harbor tray on this computer."}
         </p>
       </div>

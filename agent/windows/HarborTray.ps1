@@ -26,13 +26,25 @@ public static class HarborCursor {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern short VkKeyScan(char ch);
   public static void Apply(double nx, double ny, string action, string button, string key) {
     if (action == "key") { TypeKey(key); return; }
-    var bounds = Screen.PrimaryScreen.Bounds;
+    var screen = Screen.PrimaryScreen;
+    if (screen == null) return;
+    var bounds = screen.Bounds;
+    var vs = SystemInformation.VirtualScreen;
     int x = bounds.Left + (int)Math.Round(Clamp(nx) * Math.Max(0, bounds.Width - 1));
     int y = bounds.Top + (int)Math.Round(Clamp(ny) * Math.Max(0, bounds.Height - 1));
     SetCursorPos(x, y);
+    int ax = (int)Math.Round((x - vs.Left) * 65535.0 / Math.Max(1, vs.Width - 1));
+    int ay = (int)Math.Round((y - vs.Top) * 65535.0 / Math.Max(1, vs.Height - 1));
+    if (ax < 0) ax = 0;
+    if (ay < 0) ay = 0;
+    if (ax > 65535) ax = 65535;
+    if (ay > 65535) ay = 65535;
     bool right = button == "right";
-    if (action == "down") mouse_event(right ? 0x0008u : 0x0002u, 0, 0, 0, UIntPtr.Zero);
-    if (action == "up") mouse_event(right ? 0x0010u : 0x0004u, 0, 0, 0, UIntPtr.Zero);
+    uint flags = 0x8000u | 0x0001u;
+    if (action == "down") flags |= right ? 0x0008u : 0x0002u;
+    if (action == "up") flags |= right ? 0x0010u : 0x0004u;
+    mouse_event(flags, (uint)ax, (uint)ay, 0, UIntPtr.Zero);
+    if (action == "down" || action == "up") SetCursorPos(x, y);
   }
   static double Clamp(double n) { if (n < 0) return 0; if (n > 1) return 1; return n; }
   static void Tap(byte vk) {
@@ -153,6 +165,6 @@ $icon.ContextMenuStrip = $menu
 $icon.add_DoubleClick({ Start-Process $script:deskUrl })
 
 Start-Process $script:deskUrl
-$tip = if ($script:listenError) { "The desk is open. The pointer port is already in use." } else { "The desk is open. Arm Windows pointer there to move this cursor." }
+$tip = if ($script:listenError) { "The desk is open. The pointer port is already in use." } else { "The desk is open. Click Allow the pointer, then choose Allow." }
 $icon.ShowBalloonTip(4000, "Harbor", $tip, [System.Windows.Forms.ToolTipIcon]::Info) | Out-Null
 [System.Windows.Forms.Application]::Run()
