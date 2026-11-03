@@ -520,18 +520,30 @@ export class DeskLink {
   }
 
   private async signal(to: string, kind: "offer" | "answer" | "ice", payload: unknown) {
-    await fetch("/api/rtc", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        op: "signal",
-        room: this.opts.room,
-        from: this.peerId,
-        to,
-        kind,
-        payload,
-      }),
-    });
+    let last = "signal failed";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (this.closed) return;
+      try {
+        const res = await fetch("/api/rtc", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            op: "signal",
+            room: this.opts.room,
+            from: this.peerId,
+            to,
+            kind,
+            payload,
+          }),
+        });
+        if (res.ok) return;
+        last = `signal ${res.status}`;
+      } catch (error) {
+        last = error instanceof Error ? error.message : "signal failed";
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+    throw new Error(last);
   }
 
   private dropPeer() {

@@ -84,7 +84,7 @@ export function HostPanel({ host }: { host: Host }) {
             host.source === "display" ? "block" : "hidden",
           )}
         />
-        {!host.armed ? (
+        {host.source !== "display" && !host.armed ? (
           <div className="absolute inset-0 grid place-items-center bg-desk px-6 text-center">
             <p className="text-sm text-muted">Not shared. Share this display, then use the ID and PIN on the other computer.</p>
           </div>
@@ -159,7 +159,7 @@ export function HostPanel({ host }: { host: Host }) {
       </p>
       {host.source === "display" ? (
         <p className="text-sm text-muted">
-          Share the entire screen, then arm the Windows pointer. The browser asks once to reach the tray on this PC.
+          The whole screen is shared and the Windows pointer is armed. Allow local access if the browser asks, so the tray can move the mouse.
         </p>
       ) : null}
       <Tray host={host} />

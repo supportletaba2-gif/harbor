@@ -34,10 +34,16 @@ export function SessionTools({
   const [tab, setTab] = useState<Tab>("files");
   const [draft, setDraft] = useState("");
   const [clipDraft, setClipDraft] = useState(clip);
+  const [readChat, setReadChat] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const busy = files.some((file) => file.direction === "out" && file.status === "active");
   const open = live || files.length > 0 || chat.length > 0 || clip.length > 0 || audit.length > 0;
+  const unread = tab === "chat" ? 0 : Math.max(0, chat.length - readChat);
+
+  useEffect(() => {
+    if (tab === "chat") setReadChat(chat.length);
+  }, [tab, chat.length]);
 
   useEffect(() => {
     setClipDraft(clip);
@@ -72,7 +78,7 @@ export function SessionTools({
         {(
           [
             ["files", "Files"],
-            ["chat", "Chat"],
+            ["chat", unread > 0 ? `Chat ${unread}` : "Chat"],
             ["clip", "Clip"],
           ] as const
         ).map(([id, label]) => (
