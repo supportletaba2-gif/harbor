@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKey, type PointerEvent as ReactPointer } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PRESETS, groupId, type QualityPreset } from "@/lib/desk/types";
@@ -13,6 +14,7 @@ function requestStageFullscreen(stage: HTMLElement) {
   const legacy = stage as HTMLElement & { webkitRequestFullscreen?: () => void };
   if (typeof stage.requestFullscreen === "function") return stage.requestFullscreen();
   legacy.webkitRequestFullscreen?.();
+  return Promise.resolve();
 }
 
 export function ViewerPanel({ viewer }: { viewer: Viewer }) {
@@ -26,30 +28,32 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
 
   useEffect(() => {
     const sync = () => {
-      const stage = viewer.stageRef.current;
-      setFull(Boolean(stage && document.fullscreenElement === stage));
+      if (!document.fullscreenElement) setFull(false);
     };
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
-  }, [viewer.stageRef]);
+  }, []);
 
   useEffect(() => {
-    if (live || !document.fullscreenElement) return;
-    void document.exitFullscreen().catch(() => {});
+    if (live) return;
+    setFull(false);
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
   }, [live]);
 
-  async function toggleFull() {
+  useEffect(() => {
     const stage = viewer.stageRef.current;
-    if (!stage) return;
-    try {
-      if (document.fullscreenElement === stage) await document.exitFullscreen();
-      else {
-        await requestStageFullscreen(stage);
-        stage.focus();
-      }
-    } catch {
-      // The browser refused fullscreen. The picture stays in the card.
+    if (!full || !stage || document.fullscreenElement === stage) return;
+    void requestStageFullscreen(stage).catch(() => {});
+    stage.focus();
+  }, [full, viewer.stageRef]);
+
+  async function toggleFull() {
+    if (full || document.fullscreenElement) {
+      setFull(false);
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+      return;
     }
+    setFull(true);
   }
 
   function sendPointer(kind: "move" | "down" | "up", event: ReactPointer<HTMLDivElement>) {
@@ -101,7 +105,14 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
 
   function onKey(event: ReactKey<HTMLDivElement>) {
     if (!live) return;
-    if (event.key === "Escape" && document.fullscreenElement) return;
+    if (event.key === "Escape") {
+      if (full || document.fullscreenElement) {
+        event.preventDefault();
+        setFull(false);
+        if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+      }
+      return;
+    }
     if (event.key === "Control" || event.key === "Alt" || event.key === "Shift" || event.key === "Meta" || event.metaKey) return;
     event.preventDefault();
     const named = event.key.length > 1;
@@ -115,6 +126,69 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
     });
   }
 
+  const stageNode = live ? (
+    <div
+      ref={viewer.stageRef}
+      tabIndex={0}
+      className={cn(
+        "desk-stage relative aspect-video cursor-none overflow-hidden rounded-sm bg-bg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg",
+        full && "desk-full",
+      )}
+      onPointerDown={(event) => {
+        viewer.stageRef.current?.focus();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        sendPointer("down", event);
+      }}
+      onPointerMove={(event) => {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId) && event.pointerType === "mouse") {
+          sendPointer("move", event);
+        } else if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          sendPointer("move", event);
+        }
+      }}
+      onPointerUp={(event) => sendPointer("up", event)}
+      onPointerCancel={(event) => sendPointer("up", event)}
+      onContextMenu={(event) => event.preventDefault()}
+      onAuxClick={(event) => event.preventDefault()}
+      onKeyDown={onKey}
+      onKeyUp={onKey}
+    >
+      <video
+        ref={viewer.videoRef}
+        autoPlay
+        muted
+        playsInline
+        className={cn("pointer-events-none h-full w-full cursor-none object-contain", viewer.hasStream ? "block" : "hidden")}
+      />
+      {viewer.frameUrl && !viewer.hasStream ? (
+        <img
+          ref={viewer.frameRef}
+          src={viewer.frameUrl}
+          alt=""
+          decoding="async"
+          draggable={false}
+          className="pointer-events-none h-full w-full cursor-none object-contain"
+        />
+      ) : null}
+      {!viewer.hasStream && !viewer.frameUrl ? (
+        <p className="absolute inset-0 grid place-items-center text-sm text-muted">Waiting for the picture…</p>
+      ) : null}
+      {full ? (
+        <Button
+          className="absolute top-3 right-3 z-10"
+          onPointerDown={(event) => event.stopPropagation()}
+          onPointerUp={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            void toggleFull();
+          }}
+        >
+          Exit full screen
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
+
   return (
     <section className="flex min-w-0 flex-col gap-5 rounded-xl bg-elev p-5" data-status={viewer.status}>
       <header>
@@ -124,58 +198,10 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
 
       {live ? (
         <>
-          <div
-            ref={viewer.stageRef}
-            tabIndex={0}
-            className="desk-stage relative aspect-video cursor-none overflow-hidden rounded-sm bg-bg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg fullscreen:aspect-auto fullscreen:h-full fullscreen:w-full fullscreen:rounded-none fullscreen:bg-black"
-            onPointerDown={(event) => {
-              viewer.stageRef.current?.focus();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              sendPointer("down", event);
-            }}
-            onPointerMove={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId) && event.pointerType === "mouse") {
-                sendPointer("move", event);
-              } else if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                sendPointer("move", event);
-              }
-            }}
-            onPointerUp={(event) => sendPointer("up", event)}
-            onPointerCancel={(event) => sendPointer("up", event)}
-            onContextMenu={(event) => event.preventDefault()}
-            onAuxClick={(event) => event.preventDefault()}
-            onKeyDown={onKey}
-            onKeyUp={onKey}
-          >
-            <video
-              ref={viewer.videoRef}
-              autoPlay
-              muted
-              playsInline
-              className={cn("h-full w-full cursor-none object-contain", viewer.hasStream ? "block" : "hidden")}
-            />
-            {viewer.frameUrl && !viewer.hasStream ? (
-              <img ref={viewer.frameRef} src={viewer.frameUrl} alt="" decoding="async" draggable={false} className="h-full w-full cursor-none object-contain" />
-            ) : null}
-            {!viewer.hasStream && !viewer.frameUrl ? (
-              <p className="absolute inset-0 grid place-items-center text-sm text-muted">Waiting for the picture…</p>
-            ) : null}
-            {full ? (
-              <Button
-                className="absolute top-3 right-3 z-10"
-                onPointerDown={(event) => event.stopPropagation()}
-                onPointerUp={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void toggleFull();
-                }}
-              >
-                Exit full screen
-              </Button>
-            ) : null}
-          </div>
+          {full ? <div className="aspect-video rounded-sm bg-bg" /> : null}
+          {full ? createPortal(stageNode, document.body) : stageNode}
           <Button size="lg" className="w-full" onClick={() => void toggleFull()}>
-            Full screen
+            {full ? "Exit full screen" : "Full screen"}
           </Button>
           <div className="grid grid-cols-3 gap-2" role="group" aria-label="Picture quality">
             {(Object.keys(PRESETS) as QualityPreset[]).map((preset) => (
