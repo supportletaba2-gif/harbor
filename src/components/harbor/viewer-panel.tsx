@@ -69,6 +69,11 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
       });
       return;
     }
+    if (moveRaf.current) cancelAnimationFrame(moveRaf.current);
+    moveRaf.current = 0;
+    const queued = pending.current;
+    pending.current = null;
+    if (queued) viewer.sendInput({ kind: "move", ...queued });
     const button = event.button === 2 ? "right" : "left";
     viewer.sendInput({ kind, ...point, button });
   }
@@ -140,7 +145,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
               className={cn("h-full w-full cursor-none object-contain", viewer.hasStream ? "block" : "hidden")}
             />
             {viewer.frameUrl && !viewer.hasStream ? (
-              <img ref={viewer.frameRef} src={viewer.frameUrl} alt="" className="h-full w-full cursor-none object-contain" />
+              <img ref={viewer.frameRef} src={viewer.frameUrl} alt="" decoding="async" draggable={false} className="h-full w-full cursor-none object-contain" />
             ) : null}
             {!viewer.hasStream && !viewer.frameUrl ? (
               <p className="absolute inset-0 grid place-items-center text-sm text-muted">Waiting for the picture…</p>
@@ -180,7 +185,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
             {viewer.source === "display" ? " · live display" : ""}
           </p>
           {viewer.frameUrl && !viewer.hasStream ? (
-            <p className="text-sm text-muted">A few frames a second until a direct link opens. Files need that direct link.</p>
+            <p className="text-sm text-muted">The picture is relayed through Harbor. Move and click on it — the pointer uses your latest position while the image catches up. Files still need a direct link.</p>
           ) : null}
           <p className="text-sm text-muted" data-pointer={viewer.pointerOk === null ? "unknown" : viewer.pointerOk ? "ready" : "waiting"}>
             {viewer.aim === "page"

@@ -136,7 +136,11 @@ async function handleProbe(): Promise<Response> {
   return json({ ok: true, db: dbSource });
 }
 
-/** GET /api/rtc?room&peer&name&since — join (since=0), heartbeat, and inbox. */
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** GET /api/rtc?room&peer&name&since — join (since=0), heartbeat, and inbox. hold=1 waits for the next message. */
 async function handleGet(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const parsed = z
@@ -145,17 +149,19 @@ async function handleGet(request: Request): Promise<Response> {
       peer: ID,
       name: z.string().max(64).default(""),
       since: z.coerce.number().int().min(0).default(0),
+      hold: z.enum(["0", "1"]).default("0"),
     })
     .safeParse({
       room: url.searchParams.get("room"),
       peer: url.searchParams.get("peer"),
       name: url.searchParams.get("name") ?? "",
       since: url.searchParams.get("since") ?? 0,
+      hold: url.searchParams.get("hold") ?? "0",
     });
   if (!parsed.success) return json({ error: "invalid query" }, 400);
   const blocked = sharedStore();
   if (blocked) return blocked;
-  const { room, peer, name, since } = parsed.data;
+  const { room, peer, name, since, hold } = parsed.data;
   const keyRaw = request.headers.get("x-harbor-key") ?? "";
   const key = ID.safeParse(keyRaw).success ? keyRaw : null;
 
@@ -163,27 +169,39 @@ async function handleGet(request: Request): Promise<Response> {
   await ensureSchema(sql);
   if (since === 0 || Math.random() < 0.02) await prune(sql);
   await touchPeer(sql, room, peer, name, key);
-  const rows = await sql.query<{
-    id: number;
-    from_peer: string;
-    kind: SignalRow["kind"];
-    payload: unknown;
-  }>(
-    `SELECT id, from_peer, kind, payload FROM webrtc_signals
-     WHERE room = $1 AND to_peer = $2 AND id > $3
-     ORDER BY id LIMIT 200`,
-    [room, peer, since],
-  );
-  const body: RtcPollResponse = {
-    peers: await roster(sql, room),
-    signals: rows.map((r) => ({
-      id: Number(r.id),
-      from: r.from_peer,
-      kind: r.kind,
-      payload: r.payload,
-    })),
-  };
-  return json(body);
+
+  const until = Date.now() + (hold === "1" ? 3000 : 0);
+  let nextTouch = Date.now() + 2000;
+  for (;;) {
+    const rows = await sql.query<{
+      id: number;
+      from_peer: string;
+      kind: SignalRow["kind"];
+      payload: unknown;
+    }>(
+      `SELECT id, from_peer, kind, payload FROM webrtc_signals
+       WHERE room = $1 AND to_peer = $2 AND id > $3
+       ORDER BY id LIMIT 200`,
+      [room, peer, since],
+    );
+    if (rows.length > 0 || hold !== "1" || Date.now() >= until || request.signal.aborted) {
+      const body: RtcPollResponse = {
+        peers: await roster(sql, room),
+        signals: rows.map((r) => ({
+          id: Number(r.id),
+          from: r.from_peer,
+          kind: r.kind,
+          payload: r.payload,
+        })),
+      };
+      return json(body);
+    }
+    if (Date.now() >= nextTouch) {
+      await touchPeer(sql, room, peer, name, key);
+      nextTouch = Date.now() + 2000;
+    }
+    await sleep(25);
+  }
 }
 
 async function handlePost(request: Request): Promise<Response> {

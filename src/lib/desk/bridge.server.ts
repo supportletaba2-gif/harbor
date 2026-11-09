@@ -70,7 +70,125 @@ async function authedPeer(sql: Sql, room: string, peer: string, key: string) {
   return rows[0] ?? null;
 }
 
-/** GET latest frame. POST replaces it. */
+function emptyFrame(seq: number): Response {
+  return new Response(null, {
+    status: 204,
+    headers: { "cache-control": "no-store", "x-harbor-seq": String(seq) },
+  });
+}
+
+function jpegResponse(seq: number, jpeg: string): Response {
+  const bytes = Buffer.from(jpeg, "base64");
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      "content-type": "image/jpeg",
+      "cache-control": "no-store",
+      "x-harbor-seq": String(seq),
+    },
+  });
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function peekFrame(
+  sql: Sql,
+  room: string,
+  peer: string,
+  since: number,
+  hostName: string,
+): Promise<{ seq: number; jpeg: Buffer | null }> {
+  const frames = await sql.query<{ seq: number; viewer: string; fresh: boolean | string | number }>(
+    `SELECT seq, viewer,
+            updated_at > now() - interval '12 seconds' AS fresh
+     FROM desk_frames WHERE room = $1`,
+    [room],
+  );
+  const frame = frames[0];
+  const fresh = frame?.fresh === true || frame?.fresh === "t" || frame?.fresh === "true" || frame?.fresh === 1;
+  const seq = frame ? Number(frame.seq) : 0;
+  const ready = Boolean(frame && fresh && hostName !== "host" && frame.viewer === peer && seq > since);
+  if (!ready) return { seq, jpeg: null };
+  const bodies = await sql.query<{ seq: number; jpeg: string }>(
+    `SELECT seq, jpeg FROM desk_frames WHERE room = $1`,
+    [room],
+  );
+  const row = bodies[0];
+  const jpeg = row?.jpeg ?? "";
+  const next = row ? Number(row.seq) : seq;
+  if (!jpeg.startsWith("/9j/") || next <= since) return { seq: next, jpeg: null };
+  return { seq: next, jpeg: Buffer.from(jpeg, "base64") };
+}
+
+function packet(seq: number, jpeg: Buffer | null): Uint8Array {
+  const size = jpeg?.length ?? 0;
+  const bytes = new Uint8Array(8 + size);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, size);
+  view.setUint32(4, seq >>> 0);
+  if (jpeg && size > 0) bytes.set(jpeg, 8);
+  return bytes;
+}
+
+/** One open response. New frames are written as they land, so the viewer does not reconnect per picture. */
+function streamFrames(
+  request: Request,
+  sql: Sql,
+  room: string,
+  peer: string,
+  since: number,
+  hostName: string,
+): Response {
+  let cursor = since;
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const until = Date.now() + 8000;
+      let lastSend = Date.now();
+      try {
+        while (Date.now() < until && !request.signal.aborted) {
+          if ((controller.desiredSize ?? 1) <= 0) {
+            await sleep(30);
+            continue;
+          }
+          const hit = await peekFrame(sql, room, peer, cursor, hostName);
+          if (hit.jpeg && hit.jpeg.length >= 32 && hit.jpeg.length <= 80_000) {
+            cursor = hit.seq;
+            controller.enqueue(packet(hit.seq, hit.jpeg));
+            lastSend = Date.now();
+            await sleep(5);
+            continue;
+          }
+          if (Date.now() - lastSend > 2000) {
+            controller.enqueue(packet(0, null));
+            lastSend = Date.now();
+          }
+          await sleep(20);
+        }
+      } catch {
+        // The viewer closed the stream. The next open starts from the last seq.
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          // Already closed.
+        }
+      }
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "application/octet-stream",
+      "cache-control": "no-store, no-transform",
+      "x-accel-buffering": "no",
+      "x-harbor-stream": "1",
+    },
+  });
+}
+
+/** GET latest frame. POST replaces it. A held GET waits briefly for the next one. */
 export async function handleBridge(request: Request): Promise<Response> {
   try {
     const blocked = sharedStore();
@@ -87,40 +205,65 @@ export async function handleBridge(request: Request): Promise<Response> {
           room: ID,
           peer: ID,
           since: z.coerce.number().int().min(0).default(0),
+          hold: z.enum(["0", "1"]).default("0"),
+          stream: z.enum(["0", "1"]).default("0"),
         })
         .safeParse({
           room: url.searchParams.get("room"),
           peer: url.searchParams.get("peer"),
           since: url.searchParams.get("since") ?? 0,
+          hold: url.searchParams.get("hold") ?? "0",
+          stream: url.searchParams.get("stream") ?? "0",
         });
       if (!parsed.success) return json({ error: "invalid query" }, 400);
-      const { room, peer, since } = parsed.data;
+      const { room, peer, since, hold, stream } = parsed.data;
       const self = await authedPeer(sql, room, peer, key);
-      if (!self) return json({ seq: 0 });
-      const frames = await sql.query<{ seq: number; jpeg: string; viewer: string; fresh: boolean | string | number }>(
-        `SELECT seq, jpeg, viewer,
-                updated_at > now() - interval '12 seconds' AS fresh
-         FROM desk_frames WHERE room = $1`,
-        [room],
-      );
-      const frame = frames[0];
-      const fresh = frame?.fresh === true || frame?.fresh === "t" || frame?.fresh === "true" || frame?.fresh === 1;
-      if (!frame || !fresh) return json({ seq: 0 });
-      if (self.name !== "host" && frame.viewer !== peer) return json({ seq: Number(frame.seq) });
-      if (Number(frame.seq) <= since) return json({ seq: Number(frame.seq) });
-      return json({ seq: Number(frame.seq), jpeg: frame.jpeg });
+      if (!self) return emptyFrame(0);
+      if (stream === "1") return streamFrames(request, sql, room, peer, since, self.name);
+      const until = Date.now() + (hold === "1" ? 3000 : 0);
+      for (;;) {
+        const hit = await peekFrame(sql, room, peer, since, self.name);
+        if (hit.jpeg) return jpegResponse(hit.seq, hit.jpeg.toString("base64"));
+        if (hold !== "1" || Date.now() >= until || request.signal.aborted) return emptyFrame(hit.seq);
+        await sleep(20);
+      }
     }
 
     if (request.method === "POST") {
-      let body: unknown;
-      try {
-        body = await request.json();
-      } catch {
-        return json({ error: "invalid JSON" }, 400);
+      const url = new URL(request.url);
+      const type = request.headers.get("content-type") ?? "";
+      let msg: { room: string; peer: string; viewer: string; seq: number; jpeg: string } | null = null;
+      if (type.includes("image/jpeg")) {
+        const parsed = z
+          .object({
+            room: ID,
+            peer: ID,
+            viewer: ID,
+            seq: z.coerce.number().int().positive(),
+          })
+          .safeParse({
+            room: url.searchParams.get("room"),
+            peer: url.searchParams.get("peer"),
+            viewer: url.searchParams.get("viewer"),
+            seq: url.searchParams.get("seq"),
+          });
+        if (!parsed.success) return json({ error: "invalid request" }, 400);
+        const bytes = new Uint8Array(await request.arrayBuffer());
+        if (bytes.byteLength < 32 || bytes.byteLength > 80_000 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+          return json({ error: "invalid request" }, 400);
+        }
+        msg = { ...parsed.data, jpeg: Buffer.from(bytes).toString("base64") };
+      } else {
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return json({ error: "invalid JSON" }, 400);
+        }
+        const parsed = frameSchema.safeParse(body);
+        if (!parsed.success) return json({ error: "invalid request" }, 400);
+        msg = parsed.data;
       }
-      const parsed = frameSchema.safeParse(body);
-      if (!parsed.success) return json({ error: "invalid request" }, 400);
-      const msg = parsed.data;
       const self = await authedPeer(sql, msg.room, msg.peer, key);
       if (!self || self.name !== "host") return json({ error: "not the desk" }, 403);
       await sql.query(
@@ -128,7 +271,7 @@ export async function handleBridge(request: Request): Promise<Response> {
          VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (room) DO UPDATE
            SET seq = EXCLUDED.seq, jpeg = EXCLUDED.jpeg, viewer = EXCLUDED.viewer, updated_at = now()
-         WHERE desk_frames.updated_at < now() - interval '200 milliseconds'`,
+         WHERE desk_frames.seq < EXCLUDED.seq`,
         [msg.room, msg.seq, msg.jpeg, msg.viewer],
       );
       if (Math.random() < 0.02) {

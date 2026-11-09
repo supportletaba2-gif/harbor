@@ -216,20 +216,50 @@ export function useHostDesk() {
     video.playsInline = true;
     const ctx = canvas.getContext("2d", { alpha: false });
     const pump = async () => {
+      let paceW = relayPace(presetRef.current).w;
+      let paceQ = relayPace(presetRef.current).q;
+      let seenPreset = presetRef.current;
+      let lastSig = 0;
       while (!stop && bridgeRef.current) {
         const started = performance.now();
+        if (presetRef.current !== seenPreset) {
+          seenPreset = presetRef.current;
+          const reset = relayPace(seenPreset);
+          paceW = reset.w;
+          paceQ = reset.q;
+          lastSig = 0;
+        }
+        const cap = relayPace(presetRef.current);
+        const upload = linkRef.current?.uploadMs() ?? cap.interval;
+        if (upload > 220) {
+          paceW = Math.max(320, Math.round(paceW * 0.8));
+          paceQ = Math.max(0.28, paceQ - 0.04);
+        } else if (upload > 140) {
+          paceW = Math.max(360, Math.round(paceW * 0.9));
+        } else if (upload < 60) {
+          paceW = Math.min(cap.w, Math.round(paceW * 1.08));
+          paceQ = Math.min(cap.q, paceQ + 0.02);
+        }
+        paceW = Math.min(paceW, cap.w);
         try {
           const source = await nextFrameSource(video, previewRef.current, surfaceRef.current, streamRef.current);
           if (source && ctx) {
-            const jpeg = await encodeJpeg(canvas, ctx, source.el, source.w, source.h);
+            const jpeg = await encodeJpeg(canvas, ctx, source.el, source.w, source.h, paceW, paceQ);
             if (source.el instanceof ImageBitmap) source.el.close();
-            if (jpeg && !stop) linkRef.current?.postFrame(jpeg);
+            if (jpeg && !stop) {
+              const sig = pictureSig(jpeg);
+              if (sig !== lastSig) {
+                lastSig = sig;
+                linkRef.current?.postFrame(jpeg);
+              }
+            }
           }
         } catch {
           // The next pass tries again. A missing picture is not fatal.
         }
-        const wait = Math.max(40, 450 - (performance.now() - started));
-        await new Promise((resolve) => setTimeout(resolve, wait));
+        const budget = Math.max(cap.interval, Math.min(160, upload));
+        const wait = Math.max(0, budget - (performance.now() - started));
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       }
       video.srcObject = null;
     };
@@ -720,31 +750,35 @@ async function encodeJpeg(
   source: CanvasImageSource,
   sw: number,
   sh: number,
-): Promise<string | null> {
-  let width = Math.min(960, sw);
-  let quality = 0.5;
+  width: number,
+  quality: number,
+): Promise<Uint8Array | null> {
+  let nextWidth = width;
+  let nextQuality = quality;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const w = Math.max(2, Math.round(width));
-    const h = Math.max(2, Math.round((sh * w) / sw));
+    const w = Math.max(2, Math.round(nextWidth));
+    const h = Math.max(2, Math.round((sh * w) / Math.max(1, sw)));
     canvas.width = w;
     canvas.height = h;
     ctx.drawImage(source, 0, 0, w, h);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", nextQuality));
     if (!blob) return null;
-    const encoded = bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
-    if (encoded.startsWith("/9j/") && encoded.length <= 100_000 && blob.size <= 72_000) return encoded;
-    width = Math.max(320, Math.round(width * 0.72));
-    quality = Math.max(0.32, quality - 0.08);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (bytes.byteLength >= 32 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.byteLength <= 48_000) return bytes;
+    nextWidth = Math.max(320, Math.round(nextWidth * 0.72));
+    nextQuality = Math.max(0.28, nextQuality - 0.08);
   }
   return null;
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const step = 0x8000;
-  for (let i = 0; i < bytes.length; i += step) {
-    const slice = bytes.subarray(i, Math.min(bytes.length, i + step));
-    binary += String.fromCharCode(...slice);
-  }
-  return btoa(binary);
+function relayPace(preset: QualityPreset): { w: number; q: number; interval: number } {
+  if (preset === "smooth") return { w: 400, q: 0.32, interval: 40 };
+  if (preset === "sharp") return { w: 640, q: 0.46, interval: 70 };
+  return { w: 480, q: 0.36, interval: 50 };
+}
+
+function pictureSig(jpeg: Uint8Array): number {
+  let hash = 2166136261;
+  for (let i = 0; i < jpeg.byteLength; i += 1) hash = Math.imul(hash ^ jpeg[i]!, 16777619);
+  return hash >>> 0;
 }

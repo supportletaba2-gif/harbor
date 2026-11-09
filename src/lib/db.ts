@@ -97,7 +97,7 @@ function createNeonSql(): Promise<Sql> {
     const connectionString = postgresUrl(databaseUrl!);
     const pool = new Pool({
       connectionString,
-      max: 1,
+      max: 6,
       connectionTimeoutMillis: 12000,
       ssl: pgSsl(connectionString),
     });

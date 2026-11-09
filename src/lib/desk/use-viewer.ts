@@ -39,6 +39,8 @@ export function useViewerDesk() {
   const pipeRef = useRef(new FilePipe());
   const statusRef = useRef<LinkStatus>("idle");
   const fileState = useRef(new Map<string, string>());
+  const frameCount = useRef(0);
+  const frameWindow = useRef(0);
   const sendNoteRef = useRef<(text: string) => void>(() => {});
   const rememberRef = useRef<(text: string) => void>(() => {});
   statusRef.current = status;
@@ -185,6 +187,16 @@ export function useViewerDesk() {
           setHasStream(Boolean(video && video.videoWidth > 0));
         } else if (event.type === "frame") {
           setFrameUrl(event.jpeg);
+          if (!streamRef.current) {
+            frameCount.current += 1;
+            const now = performance.now();
+            if (frameWindow.current === 0) frameWindow.current = now;
+            if (now - frameWindow.current >= 1000) {
+              setFps(frameCount.current);
+              frameCount.current = 0;
+              frameWindow.current = now;
+            }
+          }
         } else if (event.type === "source") {
           setSource(event.kind);
         } else if (event.type === "rtt") {

@@ -86,9 +86,17 @@ export class DeskLink {
   private frameSince = 0;
   private frameSeq = 0;
   private frameBusy = false;
+  private watching = false;
+  private frameUrls: string[] = [];
   private lastAuth = 0;
   private pendingMove: ControlMsg | null = null;
   private moveTimer: ReturnType<typeof setTimeout> | null = null;
+  private outbox: ControlMsg[] = [];
+  private sendingCtrl = false;
+  private pendingFrame: Uint8Array | null = null;
+  private lastUploadMs = 90;
+  private pollAbort: AbortController | null = null;
+  private frameAbort: AbortController | null = null;
   private readonly skipped = new Set<string>();
   private readonly startedAt = Date.now();
 
@@ -111,6 +119,8 @@ export class DeskLink {
   stop() {
     if (this.closed) return;
     this.closed = true;
+    this.pollAbort?.abort();
+    this.frameAbort?.abort();
     if (this.timer) clearTimeout(this.timer);
     this.send({ t: "bye" });
     const peer = this.peerId;
@@ -135,43 +145,26 @@ export class DeskLink {
       return;
     }
     if (!this.remoteId || (this.closed && msg.t !== "bye")) return;
-    if (msg.t === "input" && msg.input.kind === "move") {
-      this.pendingMove = msg;
-      if (this.moveTimer) return;
-      this.moveTimer = setTimeout(() => {
-        this.moveTimer = null;
-        const next = this.pendingMove;
-        this.pendingMove = null;
-        if (next) this.relay(next);
-      }, 80);
+    if (msg.t === "input") {
+      this.queueInput(msg);
       return;
     }
     this.relay(msg);
   }
 
-  /** Latest JPEG, raw base64 starting with /9j/. Ignored once a direct link is up. */
-  postFrame(jpeg: string) {
-    if (this.closed || !this.authed || !this.remoteId || this.direct || this.frameBusy) return;
-    if (!jpeg.startsWith("/9j/") || jpeg.length > 100_000) return;
-    const seq = ++this.frameSeq;
-    const viewer = this.remoteId;
-    this.frameBusy = true;
-    void fetch("/api/bridge", {
-      method: "POST",
-      headers: this.headers(true),
-      body: JSON.stringify({
-        op: "frame",
-        room: this.opts.room,
-        peer: this.peerId,
-        viewer,
-        seq,
-        jpeg,
-      }),
-    })
-      .catch(() => {})
-      .finally(() => {
-        this.frameBusy = false;
-      });
+  /** Latest JPEG bytes. Ignored once a direct link is up. Keeps only the newest frame still waiting to upload. */
+  postFrame(jpeg: Uint8Array): void {
+    if (this.closed || !this.authed || !this.remoteId || this.direct) return;
+    if (jpeg.byteLength < 32 || jpeg.byteLength > 80_000 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return;
+    const copy = new ArrayBuffer(jpeg.byteLength);
+    new Uint8Array(copy).set(jpeg);
+    this.pendingFrame = new Uint8Array(copy);
+    this.drainFrames();
+  }
+
+  /** How long the last picture upload took. The host uses it to shrink the next frame. */
+  uploadMs(): number {
+    return this.lastUploadMs;
   }
 
   async setStream(stream: MediaStream) {
@@ -184,11 +177,18 @@ export class DeskLink {
 
   private async tick() {
     if (this.closed) return;
+    let had = false;
+    const started = performance.now();
     try {
-      await this.poll();
+      had = await this.poll();
       this.failures = 0;
       void this.flushOutboundIce();
     } catch (error) {
+      if (this.closed) return;
+      if (error instanceof Error && error.name === "AbortError") {
+        this.timer = setTimeout(() => void this.tick(), 200);
+        return;
+      }
       this.failures += 1;
       const reason = error instanceof Error ? error.message : "signaling";
       if (this.failures >= 3) {
@@ -206,10 +206,12 @@ export class DeskLink {
       this.lastAuth = Date.now();
       this.send({ t: "auth", pin: this.opts.pin });
     }
-    if (this.opts.role === "viewer" && this.authed && !this.direct) await this.pullFrame();
+    if (this.opts.role === "viewer" && this.authed && !this.direct) this.watchFrames();
     if (this.closed) return;
     if (this.failures === 0) this.watchTimeouts();
-    const wait = this.authed && !this.direct ? 250 : this.authed ? 1200 : 400;
+    const elapsed = performance.now() - started;
+    let wait = this.authed && !this.direct ? 0 : this.authed ? 1200 : 400;
+    if (this.authed && !this.direct && !had && elapsed < 200) wait = 200;
     this.timer = setTimeout(() => void this.tick(), wait);
   }
 
@@ -252,15 +254,18 @@ export class DeskLink {
     }
   }
 
-  private async poll() {
+  private async poll(): Promise<boolean> {
     const params = new URLSearchParams({
       room: this.opts.room,
       peer: this.peerId,
       name: this.opts.role,
       since: String(this.cursor),
     });
-    const res = await fetch(`/api/rtc?${params}`, { headers: this.headers() });
-    if (this.closed) return;
+    if (this.authed && !this.direct) params.set("hold", "1");
+    const ctrl = new AbortController();
+    this.pollAbort = ctrl;
+    const res = await fetch(`/api/rtc?${params}`, { headers: this.headers(), signal: ctrl.signal });
+    if (this.closed) return false;
     if (!res.ok) {
       let reason = `signaling ${res.status}`;
       try {
@@ -275,7 +280,8 @@ export class DeskLink {
       peers: { id: string; name: string }[];
       signals: { id: number; from: string; kind: "offer" | "answer" | "ice" | "ctrl"; payload: unknown }[];
     };
-    if (this.closed) return;
+    if (this.closed) return false;
+    const had = body.signals.length > 0;
     const peers = body.peers.filter((p) => p.id !== this.peerId);
     this.reconcile(peers);
     const alive = new Set(body.peers.map((p) => p.id));
@@ -283,8 +289,9 @@ export class DeskLink {
       this.cursor = Math.max(this.cursor, Number(sig.id));
       if (!alive.has(sig.from)) continue;
       await this.onSignal(sig.from, sig.kind, unwrap(sig.payload));
-      if (this.closed) return;
+      if (this.closed) return had;
     }
+    return had;
   }
 
   private reconcile(peers: { id: string; name: string }[]) {
@@ -489,6 +496,7 @@ export class DeskLink {
         detail: directNow ? "Connected. You are controlling the desk." : "Connected. You are controlling the desk.",
       });
       this.startPing();
+      if (!directNow) this.watchFrames();
       return;
     }
     if (!this.authed) return;
@@ -650,6 +658,7 @@ export class DeskLink {
       this.frameWaitFrom = Date.now();
       this.gotFrame = this.gotFrame && !wasDirect;
       this.opts.onEvent({ type: "bridge", on: true });
+      this.watchFrames();
       if (wasDirect) {
         this.opts.onEvent({
           type: "status",
@@ -763,9 +772,9 @@ export class DeskLink {
     }
   }
 
-  private async signal(to: string, kind: "offer" | "answer" | "ice" | "ctrl", payload: unknown) {
+  private async signal(to: string, kind: "offer" | "answer" | "ice" | "ctrl", payload: unknown, attempts = 3) {
     let last = "signal failed";
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (attempt > 0 && this.closed) return;
       try {
         const res = await fetch("/api/rtc", {
@@ -792,14 +801,18 @@ export class DeskLink {
 
   private dropPeer() {
     const bridging = this.authed && !this.direct;
+    this.authed = false;
+    this.direct = false;
+    this.remoteId = null;
+    this.pendingFrame = null;
+    this.outbox = [];
+    this.forgetFrames();
     if (this.recoverTimer) clearTimeout(this.recoverTimer);
     this.recoverTimer = null;
     this.recovering = false;
     this.iceRestarts = 0;
     this.dc = null;
     this.videoSender = null;
-    this.authed = false;
-    this.direct = false;
     this.authedAt = 0;
     this.frameWaitFrom = 0;
     this.gotFrame = false;
@@ -812,7 +825,6 @@ export class DeskLink {
     this.outboundIce = [];
     this.pc?.close();
     this.pc = null;
-    this.remoteId = null;
     if (bridging) this.opts.onEvent({ type: "bridge", on: false });
     this.opts.onEvent({ type: "stream", stream: null });
   }
@@ -831,30 +843,167 @@ export class DeskLink {
     void this.signal(this.remoteId, "ctrl", msg).catch(() => {});
   }
 
-  private async pullFrame() {
-    if (this.frameBusy || this.closed || !this.authed || this.direct) return;
+  private queueInput(msg: ControlMsg) {
+    if (msg.t !== "input") return;
+    if (msg.input.kind === "move") {
+      this.pendingMove = msg;
+      if (this.moveTimer) return;
+      this.moveTimer = setTimeout(() => this.flushMove(), 16);
+      return;
+    }
+    this.flushMove();
+    this.outbox.push(msg);
+    this.trimOutbox();
+    this.drainOutbox();
+  }
+
+  private flushMove() {
+    if (this.moveTimer) clearTimeout(this.moveTimer);
+    this.moveTimer = null;
+    const next = this.pendingMove;
+    this.pendingMove = null;
+    if (!next || next.t !== "input") return;
+    const last = this.outbox[this.outbox.length - 1];
+    if (last?.t === "input" && last.input.kind === "move") this.outbox[this.outbox.length - 1] = next;
+    else this.outbox.push(next);
+    this.trimOutbox();
+    this.drainOutbox();
+  }
+
+  /** Drop stale pointer positions. Clicks, keys, and scrolls stay in order. */
+  private trimOutbox() {
+    while (this.outbox.length > 8) {
+      const idx = this.outbox.findIndex((item) => item.t === "input" && item.input.kind === "move");
+      if (idx < 0) break;
+      this.outbox.splice(idx, 1);
+    }
+  }
+
+  private drainOutbox() {
+    if (this.sendingCtrl || this.outbox.length === 0 || !this.remoteId || !this.authed) return;
+    const msg = this.outbox.shift();
+    if (!msg) return;
+    this.sendingCtrl = true;
+    const once = msg.t === "input" && msg.input.kind === "move";
+    void this.signal(this.remoteId, "ctrl", msg, once ? 1 : 3)
+      .catch(() => undefined)
+      .finally(() => {
+        this.sendingCtrl = false;
+        if (!this.closed) this.drainOutbox();
+      });
+  }
+
+  private drainFrames() {
+    if (this.frameBusy || !this.pendingFrame || this.closed || !this.remoteId || !this.authed || this.direct) return;
+    const jpeg = this.pendingFrame;
+    this.pendingFrame = null;
+    const remote = this.remoteId;
     this.frameBusy = true;
+    const seq = ++this.frameSeq;
+    const params = new URLSearchParams({
+      room: this.opts.room,
+      peer: this.peerId,
+      viewer: remote,
+      seq: String(seq),
+    });
+    const started = performance.now();
+    const ctrl = new AbortController();
+    const killer = setTimeout(() => ctrl.abort(), 2500);
+    void fetch(`/api/bridge?${params}`, {
+      method: "POST",
+      headers: { ...this.headers(), "content-type": "image/jpeg" },
+      body: asBlob(jpeg),
+      signal: ctrl.signal,
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        clearTimeout(killer);
+        this.lastUploadMs = Math.max(1, performance.now() - started);
+        this.frameBusy = false;
+        if (!this.closed && !this.direct) this.drainFrames();
+      });
+  }
+
+  private watchFrames() {
+    if (this.watching || this.opts.role !== "viewer" || this.closed || !this.authed || this.direct) return;
+    this.watching = true;
+    void this.readFrames().finally(() => {
+      this.watching = false;
+    });
+  }
+
+  private forgetFrames() {
+    this.frameAbort?.abort();
+    for (const url of this.frameUrls) URL.revokeObjectURL(url);
+    this.frameUrls = [];
+  }
+
+  private async readFrames() {
+    while (!this.closed && this.authed && !this.direct) {
+      const opened = await this.openFrameStream();
+      if (this.closed || !this.authed || this.direct) return;
+      if (!opened) await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  /** Returns false when the stream did not stay open. */
+  private async openFrameStream(): Promise<boolean> {
+    if (this.closed || !this.authed || this.direct) return false;
+    const ctrl = new AbortController();
+    this.frameAbort = ctrl;
+    const killer = setTimeout(() => ctrl.abort(), 15000);
     try {
       const params = new URLSearchParams({
         room: this.opts.room,
         peer: this.peerId,
         since: String(this.frameSince),
+        stream: "1",
       });
-      const res = await fetch(`/api/bridge?${params}`, { headers: this.headers() });
-      if (!res.ok || this.closed || this.direct) return;
-      const body = (await res.json()) as { seq?: unknown; jpeg?: unknown };
-      const seq = typeof body.seq === "number" ? body.seq : Number(body.seq);
-      if (!Number.isFinite(seq)) return;
-      if (typeof body.jpeg === "string" && body.jpeg.startsWith("/9j/")) {
-        this.frameSince = seq;
-        this.gotFrame = true;
-        this.opts.onEvent({ type: "frame", jpeg: `data:image/jpeg;base64,${body.jpeg}` });
+      const res = await fetch(`/api/bridge?${params}`, { headers: this.headers(), signal: ctrl.signal });
+      if (!res.ok || !res.body || res.headers.get("x-harbor-stream") !== "1") return false;
+      const reader = res.body.getReader();
+      let buf = new Uint8Array(0);
+      let received = false;
+      while (!this.closed && this.authed && !this.direct) {
+        const chunk = await reader.read();
+        if (chunk.done) return received;
+        buf = concatBytes(buf, chunk.value);
+        if (buf.length > 120_000) return false;
+        while (buf.length >= 8) {
+          const len = readU32(buf, 0);
+          const seq = readU32(buf, 4);
+          if (len === 0) {
+            buf = buf.subarray(8);
+            continue;
+          }
+          if (len < 32 || len > 80_000) return false;
+          if (buf.length < 8 + len) break;
+          const bytes = new Uint8Array(len);
+          bytes.set(buf.subarray(8, 8 + len));
+          buf = buf.subarray(8 + len);
+          if (seq > this.frameSince) this.frameSince = seq;
+          this.showFrame(bytes);
+          received = true;
+        }
       }
+      return received;
     } catch {
-      // The next tick asks again.
+      return false;
     } finally {
-      this.frameBusy = false;
+      clearTimeout(killer);
     }
+  }
+
+  private showFrame(jpeg: Uint8Array) {
+    if (this.closed || this.direct || jpeg.byteLength < 32 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return;
+    const url = URL.createObjectURL(asBlob(jpeg));
+    this.frameUrls.push(url);
+    while (this.frameUrls.length > 3) {
+      const old = this.frameUrls.shift();
+      if (old) URL.revokeObjectURL(old);
+    }
+    this.gotFrame = true;
+    this.opts.onEvent({ type: "frame", jpeg: url });
   }
 }
 
@@ -891,4 +1040,21 @@ function parseMsg(raw: string): ControlMsg | null {
   } catch {
     return null;
   }
+}
+
+function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(left.length + right.length));
+  out.set(left, 0);
+  out.set(right, left.length);
+  return out;
+}
+
+function asBlob(jpeg: Uint8Array): Blob {
+  const copy = new ArrayBuffer(jpeg.byteLength);
+  new Uint8Array(copy).set(jpeg);
+  return new Blob([copy], { type: "image/jpeg" });
+}
+
+function readU32(bytes: Uint8Array, offset: number): number {
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0);
 }
