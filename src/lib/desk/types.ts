@@ -55,6 +55,7 @@ export type ControlMsg =
   | { t: "source"; kind: DeskSource }
   | { t: "aim"; kind: Aim }
   | { t: "pointer"; ok: boolean }
+  | { t: "seeing"; ok: boolean }
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
   | { t: "chat"; text: string }

@@ -30,24 +30,10 @@ public static class HarborCursor {
     if (action == "clip") { PasteClip(key); return; }
     if (action == "wheel") { Move(nx, ny); Wheel(wheel); return; }
     Move(nx, ny);
+    if (action != "down" && action != "up") return;
     bool right = button == "right";
-    var screen = Screen.PrimaryScreen;
-    if (screen == null) return;
-    var bounds = screen.Bounds;
-    var vs = SystemInformation.VirtualScreen;
-    int x = bounds.Left + (int)Math.Round(Clamp(nx) * Math.Max(0, bounds.Width - 1));
-    int y = bounds.Top + (int)Math.Round(Clamp(ny) * Math.Max(0, bounds.Height - 1));
-    int ax = (int)Math.Round((x - vs.Left) * 65535.0 / Math.Max(1, vs.Width - 1));
-    int ay = (int)Math.Round((y - vs.Top) * 65535.0 / Math.Max(1, vs.Height - 1));
-    if (ax < 0) ax = 0;
-    if (ay < 0) ay = 0;
-    if (ax > 65535) ax = 65535;
-    if (ay > 65535) ay = 65535;
-    uint flags = 0x8000u | 0x0001u;
-    if (action == "down") flags |= right ? 0x0008u : 0x0002u;
-    if (action == "up") flags |= right ? 0x0010u : 0x0004u;
-    mouse_event(flags, (uint)ax, (uint)ay, 0, UIntPtr.Zero);
-    if (action == "down" || action == "up") SetCursorPos(x, y);
+    uint flags = action == "down" ? (right ? 0x0008u : 0x0002u) : (right ? 0x0010u : 0x0004u);
+    mouse_event(flags, 0, 0, 0, UIntPtr.Zero);
   }
   static void Move(double nx, double ny) {
     var screen = Screen.PrimaryScreen;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { aimNote, letterboxNorm, pointerBody, screenPoint } from "./windows-pointer.ts";
+import { accumulateWheel, aimNote, letterboxNorm, pointerBody, screenPoint } from "./windows-pointer.ts";
 
 describe("windows pointer", () => {
   it("maps a normalized point onto a screen", () => {
@@ -27,6 +27,21 @@ describe("windows pointer", () => {
       JSON.stringify({ action: "wheel", x: 0.2, y: 0.4, delta: -1 }),
     );
     assert.equal(pointerBody({ kind: "wheel", x: 0.2, y: 0.4, delta: 10 }), null);
+  });
+
+  it("adds up trackpad and line scrolls into one notch", () => {
+    let pending = 0;
+    let sent = 0;
+    for (const step of [16, 16, 16, 16, 20, 16]) {
+      const next = accumulateWheel(pending, step, 0);
+      pending = next.pending;
+      sent += next.delta;
+    }
+    assert.equal(sent, 100);
+    assert.ok(pending < 100);
+    assert.deepEqual(accumulateWheel(0, 1, 1), { pending: 0, delta: 100 });
+    assert.deepEqual(accumulateWheel(0, -3, 1), { pending: 0, delta: -300 });
+    assert.equal(pointerBody({ kind: "wheel", x: 0.2, y: 0.4, delta: -100 }), JSON.stringify({ action: "wheel", x: 0.2, y: 0.4, delta: 1 }));
   });
 
   it("names the pointer mode", () => {

@@ -231,13 +231,11 @@ export function useHostDesk() {
         }
         const cap = relayPace(presetRef.current);
         const upload = linkRef.current?.uploadMs() ?? cap.interval;
-        if (upload > 220) {
-          paceW = Math.max(320, Math.round(paceW * 0.8));
+        if (upload > 180) {
+          paceW = Math.max(320, Math.round(paceW * 0.85));
           paceQ = Math.max(0.28, paceQ - 0.04);
-        } else if (upload > 140) {
-          paceW = Math.max(360, Math.round(paceW * 0.9));
-        } else if (upload < 60) {
-          paceW = Math.min(cap.w, Math.round(paceW * 1.08));
+        } else if (upload < 70) {
+          paceW = Math.min(cap.w, Math.round(paceW * 1.06));
           paceQ = Math.min(cap.q, paceQ + 0.02);
         }
         paceW = Math.min(paceW, cap.w);
@@ -257,8 +255,7 @@ export function useHostDesk() {
         } catch {
           // The next pass tries again. A missing picture is not fatal.
         }
-        const budget = Math.max(cap.interval, Math.min(160, upload));
-        const wait = Math.max(0, budget - (performance.now() - started));
+        const wait = Math.max(0, cap.interval - (performance.now() - started));
         if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       }
       video.srcObject = null;
@@ -297,7 +294,13 @@ export function useHostDesk() {
         }
         noteActivity(
           input,
-          input.kind === "key" ? `Key ${input.key}` : input.kind === "wheel" ? "Scroll" : "Windows pointer",
+          input.kind === "key"
+            ? `Key ${input.key}`
+            : input.kind === "wheel"
+              ? "Scroll"
+              : input.kind === "down" && input.button === "right"
+                ? "Right click"
+                : "Windows pointer",
         );
         return;
       }
@@ -772,9 +775,10 @@ async function encodeJpeg(
 }
 
 function relayPace(preset: QualityPreset): { w: number; q: number; interval: number } {
-  if (preset === "smooth") return { w: 400, q: 0.32, interval: 40 };
-  if (preset === "sharp") return { w: 640, q: 0.46, interval: 70 };
-  return { w: 480, q: 0.36, interval: 50 };
+  // About 15 pictures a second when the upload is quick. Sharp spends the time on a larger picture.
+  if (preset === "smooth") return { w: 480, q: 0.32, interval: 66 };
+  if (preset === "sharp") return { w: 720, q: 0.4, interval: 80 };
+  return { w: 640, q: 0.36, interval: 66 };
 }
 
 function pictureSig(jpeg: Uint8Array): number {

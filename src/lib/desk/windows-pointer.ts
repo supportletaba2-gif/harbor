@@ -54,6 +54,23 @@ export function letterboxNorm(
   };
 }
 
+/**
+ * Turn a burst of wheel events into notches of 100px.
+ * deltaMode 1 is lines (Firefox), 2 is pages. Tiny trackpad steps add up
+ * instead of being thrown away.
+ */
+export function accumulateWheel(pending: number, deltaY: number, mode = 0): { pending: number; delta: number } {
+  let px = deltaY;
+  if (mode === 1) px = deltaY * 100;
+  else if (mode === 2) px = deltaY * 800;
+  if (!Number.isFinite(px) || px === 0) return { pending, delta: 0 };
+  const sum = pending + px;
+  let steps = Math.trunc(sum / 100);
+  if (steps === 0) return { pending: sum, delta: 0 };
+  steps = Math.max(-6, Math.min(6, steps));
+  return { pending: sum - steps * 100, delta: steps * 100 };
+}
+
 export function pointerBody(input: DeskInput): string | null {
   if (input.kind === "key") {
     if (!input.down) return null;

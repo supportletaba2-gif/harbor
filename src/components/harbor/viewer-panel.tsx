@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKey, type Point
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PRESETS, groupId, type QualityPreset } from "@/lib/desk/types";
-import { letterboxNorm } from "@/lib/desk/windows-pointer";
+import { accumulateWheel, letterboxNorm } from "@/lib/desk/windows-pointer";
 import type { useViewerDesk } from "@/lib/desk/use-viewer";
 import { cn } from "@/lib/utils";
 import { SessionTools } from "./session-tools";
@@ -19,6 +19,8 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
   const moveRaf = useRef(0);
   const pending = useRef<{ x: number; y: number } | null>(null);
   const aspect = useRef({ w: 16, h: 9 });
+  const held = useRef<"left" | "right">("left");
+  const wheelPending = useRef(0);
   const live = viewer.status === "live";
   const [full, setFull] = useState(false);
 
@@ -74,8 +76,11 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
     const queued = pending.current;
     pending.current = null;
     if (queued) viewer.sendInput({ kind: "move", ...queued });
-    const button = event.button === 2 ? "right" : "left";
-    viewer.sendInput({ kind, ...point, button });
+    if (kind === "down") {
+      held.current = event.button === 2 ? "right" : "left";
+      if (held.current === "right") event.preventDefault();
+    }
+    viewer.sendInput({ kind, ...point, button: held.current });
   }
 
   useEffect(() => {
@@ -85,10 +90,13 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
       event.preventDefault();
       const point = letterboxNorm(stage.getBoundingClientRect(), aspect.current.w, aspect.current.h, event.clientX, event.clientY);
       if (point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) return;
-      viewer.sendInput({ kind: "wheel", ...point, delta: event.deltaY });
+      const next = accumulateWheel(wheelPending.current, event.deltaY, event.deltaMode);
+      wheelPending.current = next.pending;
+      if (!next.delta) return;
+      viewer.sendInput({ kind: "wheel", ...point, delta: next.delta });
     };
-    stage.addEventListener("wheel", onWheel, { passive: false });
-    return () => stage.removeEventListener("wheel", onWheel);
+    stage.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => stage.removeEventListener("wheel", onWheel, { capture: true });
   }, [live, viewer.sendInput, viewer.stageRef]);
 
   function onKey(event: ReactKey<HTMLDivElement>) {
@@ -133,7 +141,9 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
               }
             }}
             onPointerUp={(event) => sendPointer("up", event)}
+            onPointerCancel={(event) => sendPointer("up", event)}
             onContextMenu={(event) => event.preventDefault()}
+            onAuxClick={(event) => event.preventDefault()}
             onKeyDown={onKey}
             onKeyUp={onKey}
           >
@@ -180,12 +190,17 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
             ))}
           </div>
           <p className="font-mono text-sm text-muted tabular-nums">
-            {viewer.rtt !== null ? `${viewer.rtt} ms` : "Link up"}
-            {viewer.fps !== null ? ` · ${viewer.fps} fps` : ""}
+            {viewer.hasStream ? "Direct link" : viewer.frameUrl ? "Relay" : "Link"}
+            {viewer.rtt !== null ? ` · ${viewer.rtt} ms` : ""}
+            {viewer.fps !== null ? ` · ${viewer.fps} fps` : viewer.frameUrl && !viewer.hasStream ? " · about 15 fps" : ""}
             {viewer.source === "display" ? " · live display" : ""}
           </p>
           {viewer.frameUrl && !viewer.hasStream ? (
-            <p className="text-sm text-muted">The picture is relayed through Harbor. Move and click on it — the pointer uses your latest position while the image catches up. Files still need a direct link.</p>
+            <p className="text-sm text-muted">
+              About 15 frames a second through Harbor, which is enough to work but not a video call. A direct link is full video, about 24 frames a second, and it takes over on its own when the two networks can see each other. Files move only on that direct link. Right-click and the scroll wheel go to the shared PC.
+            </p>
+          ) : viewer.hasStream ? (
+            <p className="text-sm text-muted">Direct link, about 24 frames a second. Right-click and the scroll wheel go to the shared PC.</p>
           ) : null}
           <p className="text-sm text-muted" data-pointer={viewer.pointerOk === null ? "unknown" : viewer.pointerOk ? "ready" : "waiting"}>
             {viewer.aim === "page"

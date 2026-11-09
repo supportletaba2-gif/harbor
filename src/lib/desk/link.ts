@@ -386,21 +386,8 @@ export class DeskLink {
           clearTimeout(this.recoverTimer);
           this.recoverTimer = null;
         }
-        const becameDirect = !this.direct;
-        this.direct = true;
         void this.applyBitrate();
         window.setTimeout(() => void this.applyBitrate(), 400);
-        if (this.authed && becameDirect) {
-          this.opts.onEvent({ type: "bridge", on: false });
-          this.opts.onEvent({
-            type: "status",
-            status: "live",
-            detail:
-              this.opts.role === "host"
-                ? "Connected. Remote input is on."
-                : "Connected. You are controlling the desk.",
-          });
-        }
       }
     };
     pc.ontrack = (event) => {
@@ -412,6 +399,12 @@ export class DeskLink {
       else this.bindChannel(event.channel);
     };
     if (initiator) {
+      const stream = this.opts.getStream?.() ?? null;
+      const track = stream?.getVideoTracks()[0];
+      if (track && stream) {
+        track.contentHint = this.preset === "sharp" ? "detail" : "motion";
+        this.videoSender = pc.addTrack(track, stream);
+      }
       this.bindChannel(pc.createDataChannel("control", { ordered: true }));
       this.bindFiles(pc.createDataChannel("files", { ordered: true }));
       pc.onnegotiationneeded = () => {
@@ -465,14 +458,13 @@ export class DeskLink {
       this.send({ t: "source", kind: this.opts.getSource?.() ?? "desk" });
       const stream = this.opts.getStream?.();
       if (stream) void this.publish(stream);
-      const directNow = this.pc?.connectionState === "connected";
-      this.direct = Boolean(directNow);
-      if (!directNow) this.frameWaitFrom = this.authedAt;
-      this.opts.onEvent({ type: "bridge", on: !directNow });
+      this.direct = false;
+      this.frameWaitFrom = this.authedAt;
+      this.opts.onEvent({ type: "bridge", on: true });
       this.opts.onEvent({
         type: "status",
         status: "live",
-        detail: directNow ? "Connected. Remote input is on." : "Connected. The screen is coming through Harbor.",
+        detail: "Connected. The screen is coming through Harbor.",
       });
       return;
     }
@@ -486,20 +478,23 @@ export class DeskLink {
       this.authed = true;
       this.authedAt = Date.now();
       this.send({ t: "quality", preset: this.preset });
-      const directNow = this.pc?.connectionState === "connected";
-      this.direct = Boolean(directNow);
-      if (!directNow) this.frameWaitFrom = this.authedAt;
-      this.opts.onEvent({ type: "bridge", on: !directNow });
+      this.direct = false;
+      this.frameWaitFrom = this.authedAt;
+      this.opts.onEvent({ type: "bridge", on: true });
       this.opts.onEvent({
         type: "status",
         status: "live",
-        detail: directNow ? "Connected. You are controlling the desk." : "Connected. You are controlling the desk.",
+        detail: "Connected. You are controlling the desk.",
       });
       this.startPing();
-      if (!directNow) this.watchFrames();
+      this.watchFrames();
       return;
     }
     if (!this.authed) return;
+    if (msg.t === "seeing" && this.opts.role === "host" && typeof msg.ok === "boolean") {
+      this.takeDirect(msg.ok);
+      return;
+    }
     if (msg.t === "input" && this.opts.role === "host") {
       this.opts.onEvent({ type: "input", input: msg.input });
       return;
@@ -577,6 +572,56 @@ export class DeskLink {
         this.opts.onEvent({ type: "status", status: "ended", detail: "The desk ended the session." });
         this.stop();
       }
+    }
+  }
+
+  /** The viewer calls this once real video frames are on screen. Until then the JPEG stays up. */
+  noteSeeing(ok: boolean) {
+    if (this.closed || this.opts.role !== "viewer" || !this.authed) return;
+    if (ok === this.direct) return;
+    this.direct = ok;
+    this.send({ t: "seeing", ok });
+    if (ok) {
+      this.forgetFrames();
+      this.opts.onEvent({ type: "bridge", on: false });
+      this.opts.onEvent({
+        type: "status",
+        status: "live",
+        detail: "Direct link. Full video, about 24 frames a second.",
+      });
+      return;
+    }
+    this.frameWaitFrom = Date.now();
+    this.opts.onEvent({ type: "bridge", on: true });
+    this.watchFrames();
+    this.opts.onEvent({
+      type: "status",
+      status: "live",
+      detail: "The screen is coming through Harbor, about 15 frames a second.",
+    });
+  }
+
+  private takeDirect(ok: boolean) {
+    if (ok) {
+      if (this.direct) return;
+      this.direct = true;
+      this.opts.onEvent({ type: "bridge", on: false });
+      this.opts.onEvent({
+        type: "status",
+        status: "live",
+        detail: "Direct link. Full video, about 24 frames a second.",
+      });
+      return;
+    }
+    if (!ok && this.direct) {
+      this.direct = false;
+      this.frameWaitFrom = Date.now();
+      this.opts.onEvent({ type: "bridge", on: true });
+      this.opts.onEvent({
+        type: "status",
+        status: "live",
+        detail: "Direct path dropped. The screen is coming through Harbor.",
+      });
     }
   }
 
@@ -748,10 +793,12 @@ export class DeskLink {
     const pc = this.pc;
     const track = stream.getVideoTracks()[0];
     if (!pc || !track) return;
-    track.contentHint = "detail";
+    track.contentHint = this.preset === "sharp" ? "detail" : "motion";
+    const added = !this.videoSender;
     if (this.videoSender) await this.videoSender.replaceTrack(track);
     else this.videoSender = pc.addTrack(track, stream);
     await this.applyBitrate();
+    if (!added && pc.signalingState === "stable" && !this.makingOffer) void this.offer();
   }
 
   private async applyBitrate() {
@@ -761,7 +808,7 @@ export class DeskLink {
     try {
       const params = sender.getParameters();
       if (!params.encodings?.length) params.encodings = [{}];
-      params.degradationPreference = "maintain-resolution";
+      params.degradationPreference = this.preset === "sharp" ? "maintain-resolution" : "maintain-framerate";
       const encoding = params.encodings[0];
       encoding.maxBitrate = preset.bitrate;
       encoding.maxFramerate = preset.fps;

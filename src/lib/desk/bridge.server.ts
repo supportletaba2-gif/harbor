@@ -4,6 +4,7 @@
  * The frame is overwritten in place and dropped if it goes stale.
  */
 import { z } from "zod";
+import { rememberFrame, waitLive } from "@/lib/desk/frame-hub";
 import { dbSource, getSql, type Sql } from "@/lib/db";
 
 const ID = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
@@ -149,8 +150,18 @@ function streamFrames(
       try {
         while (Date.now() < until && !request.signal.aborted) {
           if ((controller.desiredSize ?? 1) <= 0) {
-            await sleep(30);
+            await sleep(20);
             continue;
+          }
+          if (hostName !== "host") {
+            const mem = await waitLive(room, peer, cursor, request.signal, 40);
+            if (request.signal.aborted) break;
+            if (mem && mem.jpeg.length <= 80_000) {
+              cursor = mem.seq;
+              controller.enqueue(packet(mem.seq, mem.jpeg));
+              lastSend = Date.now();
+              continue;
+            }
           }
           const hit = await peekFrame(sql, room, peer, cursor, hostName);
           if (hit.jpeg && hit.jpeg.length >= 32 && hit.jpeg.length <= 80_000) {
@@ -266,6 +277,8 @@ export async function handleBridge(request: Request): Promise<Response> {
       }
       const self = await authedPeer(sql, msg.room, msg.peer, key);
       if (!self || self.name !== "host") return json({ error: "not the desk" }, 403);
+      const raw = Buffer.from(msg.jpeg, "base64");
+      rememberFrame(msg.room, msg.seq, raw, msg.viewer);
       await sql.query(
         `INSERT INTO desk_frames (room, seq, jpeg, viewer, updated_at)
          VALUES ($1, $2, $3, $4, now())
@@ -274,9 +287,6 @@ export async function handleBridge(request: Request): Promise<Response> {
          WHERE desk_frames.seq < EXCLUDED.seq`,
         [msg.room, msg.seq, msg.jpeg, msg.viewer],
       );
-      if (Math.random() < 0.02) {
-        await sql.query(`DELETE FROM desk_frames WHERE updated_at < now() - make_interval(secs => 30)`);
-      }
       return json({ ok: true });
     }
 

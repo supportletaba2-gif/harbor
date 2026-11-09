@@ -89,6 +89,11 @@ export function useViewerDesk() {
   }, [status]);
 
   useEffect(() => {
+    if (status !== "live") return;
+    linkRef.current?.noteSeeing(hasStream);
+  }, [hasStream, status]);
+
+  useEffect(() => {
     const video = videoRef.current;
     if (status !== "live" || !video || !hasStream) return;
     let frames = 0;

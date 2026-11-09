@@ -86,15 +86,22 @@ export function defaultIceServers(): RTCIceServer[] {
     ?.split(",")
     .map((u) => u.trim())
     .filter(Boolean);
-  // Two independent providers: ICE queries all of them in parallel during
-  // gathering, so either one being unreachable costs nothing.
-  return [
+  const servers: RTCIceServer[] = [
     {
       urls: urls?.length
         ? urls
         : ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
     },
   ];
+  // A TURN server is optional. Leave these empty unless you run your own relay.
+  const turn = (import.meta.env.VITE_TURN_URLS as string | undefined)
+    ?.split(",")
+    .map((u) => u.trim())
+    .filter(Boolean);
+  const username = (import.meta.env.VITE_TURN_USERNAME as string | undefined)?.trim();
+  const credential = (import.meta.env.VITE_TURN_CREDENTIAL as string | undefined)?.trim();
+  if (turn?.length && username && credential) servers.push({ urls: turn, username, credential });
+  return servers;
 }
 
 export class P2PRoom {
