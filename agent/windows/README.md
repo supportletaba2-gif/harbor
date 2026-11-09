@@ -30,7 +30,7 @@ If Windows asks about local network access for the site, allow it. That is the b
 1. On the Windows PC, the tray opens the desk. Click **Allow the pointer** and choose **Allow** when Chrome asks to connect to a device on the local network. The page should then say the tray has the pointer. If it says the tray is not running, start Harbor from the Startup shortcut and click Allow the pointer again.
 2. Choose **Share this display**, then the entire screen (not a window). Leave that tab open. Wait until it says Waiting. Copy that ID and PIN.
 3. On the other computer, open https://delta-quartz-kite-jolly.grok.me. Enter that ID and PIN. Choose **Connect**. Do not choose **Control this page**.
-4. On the other computer, click and drag on the picture. The Windows cursor should follow. A click lands where the cursor is. Letters, Enter, Backspace, Tab, Escape, and the arrow keys type into the focused Windows window.
+4. On the other computer, click and drag on the picture. The Windows cursor should follow. Left click, right click, and the scroll wheel land on that PC. Letters, Enter, Backspace, Tab, Escape, Delete, and the arrow keys type into the focused window, including Ctrl and Alt shortcuts. Clipboard text sent from that computer is placed on this PC's clipboard.
 
 If the other computer says the mouse is waiting, the Allow prompt was missed. On the shared PC, click **Allow the pointer** again and choose Allow. A probe that runs by itself never shows that prompt, so the cursor does nothing until this click.
 

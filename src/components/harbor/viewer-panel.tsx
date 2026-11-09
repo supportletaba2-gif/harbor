@@ -69,15 +69,37 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
       });
       return;
     }
-    viewer.sendInput({ kind, ...point });
+    const button = event.button === 2 ? "right" : "left";
+    viewer.sendInput({ kind, ...point, button });
   }
+
+  useEffect(() => {
+    const stage = viewer.stageRef.current;
+    if (!live || !stage) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const point = letterboxNorm(stage.getBoundingClientRect(), aspect.current.w, aspect.current.h, event.clientX, event.clientY);
+      if (point.x < 0 || point.y < 0 || point.x > 1 || point.y > 1) return;
+      viewer.sendInput({ kind: "wheel", ...point, delta: event.deltaY });
+    };
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+  }, [live, viewer.sendInput, viewer.stageRef]);
 
   function onKey(event: ReactKey<HTMLDivElement>) {
     if (!live) return;
     if (event.key === "Escape" && document.fullscreenElement) return;
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "Control" || event.key === "Alt" || event.key === "Shift" || event.key === "Meta" || event.metaKey) return;
     event.preventDefault();
-    viewer.sendInput({ kind: "key", key: event.key, down: event.type === "keydown" });
+    const named = event.key.length > 1;
+    viewer.sendInput({
+      kind: "key",
+      key: event.key,
+      down: event.type === "keydown",
+      ctrl: event.ctrlKey || undefined,
+      alt: event.altKey || undefined,
+      shift: named && event.shiftKey ? true : undefined,
+    });
   }
 
   return (
@@ -106,6 +128,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
               }
             }}
             onPointerUp={(event) => sendPointer("up", event)}
+            onContextMenu={(event) => event.preventDefault()}
             onKeyDown={onKey}
             onKeyUp={onKey}
           >
@@ -165,7 +188,7 @@ export function ViewerPanel({ viewer }: { viewer: Viewer }) {
               : viewer.aim === "windows" && viewer.pointerOk === false
                 ? "The mouse is waiting. On the shared PC, click Allow the pointer and choose Allow. The Harbor tray must be running."
                 : viewer.aim === "windows" && viewer.pointerOk === true
-                  ? "The Windows pointer is live. Move and click on the picture."
+                  ? "The Windows pointer is live. Move, click, right-click, and scroll on the picture. Type while it is selected."
                   : viewer.aim === "windows"
                     ? "This pointer moves the Windows cursor on the host PC. The host must be sharing the entire screen, with the Harbor tray running."
                     : "The Windows pointer moves the mouse on the shared PC. Share the entire screen, with the Harbor tray running."}

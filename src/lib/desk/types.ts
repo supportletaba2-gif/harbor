@@ -18,8 +18,9 @@ export type LinkStatus =
   | "error";
 
 export type DeskInput =
-  | { kind: "move" | "down" | "up"; x: number; y: number }
-  | { kind: "key"; key: string; down: boolean };
+  | { kind: "move" | "down" | "up"; x: number; y: number; button?: "left" | "right" }
+  | { kind: "wheel"; x: number; y: number; delta: number }
+  | { kind: "key"; key: string; down: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean };
 
 export type ProcRow = {
   pid: number;

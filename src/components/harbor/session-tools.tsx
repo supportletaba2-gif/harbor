@@ -198,7 +198,11 @@ export function SessionTools({
               Copy
             </Button>
           </div>
-          <p className="text-sm text-muted">Text on the encrypted link. It does not paste into the other computer.</p>
+          <p className="text-sm text-muted">
+            {self === "viewer"
+              ? "Send places this text on the shared PC's clipboard."
+              : "Send places this text on the other computer. It does not change this PC's clipboard."}
+          </p>
         </form>
       ) : null}
     </div>

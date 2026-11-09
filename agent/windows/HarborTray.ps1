@@ -18,56 +18,97 @@ if (-not ("HarborCursor" -as [type])) {
   Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 public static class HarborCursor {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern short VkKeyScan(char ch);
-  public static void Apply(double nx, double ny, string action, string button, string key) {
-    if (action == "key") { TypeKey(key); return; }
+  public static void Apply(double nx, double ny, string action, string button, string key, bool ctrl, bool alt, bool shift, int wheel) {
+    if (action == "key") { TypeKey(key, ctrl, alt, shift); return; }
+    if (action == "clip") { PasteClip(key); return; }
+    if (action == "wheel") { Move(nx, ny); Wheel(wheel); return; }
+    Move(nx, ny);
+    bool right = button == "right";
     var screen = Screen.PrimaryScreen;
     if (screen == null) return;
     var bounds = screen.Bounds;
     var vs = SystemInformation.VirtualScreen;
     int x = bounds.Left + (int)Math.Round(Clamp(nx) * Math.Max(0, bounds.Width - 1));
     int y = bounds.Top + (int)Math.Round(Clamp(ny) * Math.Max(0, bounds.Height - 1));
-    SetCursorPos(x, y);
     int ax = (int)Math.Round((x - vs.Left) * 65535.0 / Math.Max(1, vs.Width - 1));
     int ay = (int)Math.Round((y - vs.Top) * 65535.0 / Math.Max(1, vs.Height - 1));
     if (ax < 0) ax = 0;
     if (ay < 0) ay = 0;
     if (ax > 65535) ax = 65535;
     if (ay > 65535) ay = 65535;
-    bool right = button == "right";
     uint flags = 0x8000u | 0x0001u;
     if (action == "down") flags |= right ? 0x0008u : 0x0002u;
     if (action == "up") flags |= right ? 0x0010u : 0x0004u;
     mouse_event(flags, (uint)ax, (uint)ay, 0, UIntPtr.Zero);
     if (action == "down" || action == "up") SetCursorPos(x, y);
   }
+  static void Move(double nx, double ny) {
+    var screen = Screen.PrimaryScreen;
+    if (screen == null) return;
+    var bounds = screen.Bounds;
+    int x = bounds.Left + (int)Math.Round(Clamp(nx) * Math.Max(0, bounds.Width - 1));
+    int y = bounds.Top + (int)Math.Round(Clamp(ny) * Math.Max(0, bounds.Height - 1));
+    SetCursorPos(x, y);
+  }
+  static void Wheel(int notches) {
+    if (notches == 0) return;
+    mouse_event(0x0800, 0, 0, unchecked((uint)(notches * 120)), UIntPtr.Zero);
+  }
+  static void PasteClip(string text) {
+    if (string.IsNullOrEmpty(text)) return;
+    if (text.Length > 2000) text = text.Substring(0, 2000);
+    var thread = new Thread(() => { try { Clipboard.SetText(text); } catch { } });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.IsBackground = true;
+    thread.Start();
+    thread.Join(1000);
+  }
   static double Clamp(double n) { if (n < 0) return 0; if (n > 1) return 1; return n; }
   static void Tap(byte vk) {
     keybd_event(vk, 0, 0, UIntPtr.Zero);
     keybd_event(vk, 0, 2, UIntPtr.Zero);
   }
-  static void TypeKey(string key) {
+  static byte Named(string key) {
+    if (key == "Enter") return 0x0D;
+    if (key == "Backspace") return 0x08;
+    if (key == "Tab") return 0x09;
+    if (key == "Escape") return 0x1B;
+    if (key == "Delete") return 0x2E;
+    if (key == "Home") return 0x24;
+    if (key == "End") return 0x23;
+    if (key == "PageUp") return 0x21;
+    if (key == "PageDown") return 0x22;
+    if (key == "ArrowLeft") return 0x25;
+    if (key == "ArrowUp") return 0x26;
+    if (key == "ArrowRight") return 0x27;
+    if (key == "ArrowDown") return 0x28;
+    return 0;
+  }
+  static void TypeKey(string key, bool ctrl, bool alt, bool shift) {
     if (string.IsNullOrEmpty(key)) return;
-    if (key == "Enter") { Tap(0x0D); return; }
-    if (key == "Backspace") { Tap(0x08); return; }
-    if (key == "Tab") { Tap(0x09); return; }
-    if (key == "Escape") { Tap(0x1B); return; }
-    if (key == "ArrowLeft") { Tap(0x25); return; }
-    if (key == "ArrowUp") { Tap(0x26); return; }
-    if (key == "ArrowRight") { Tap(0x27); return; }
-    if (key == "ArrowDown") { Tap(0x28); return; }
-    if (key.Length != 1) return;
-    short packed = VkKeyScan(key[0]);
-    if (packed == -1) return;
-    bool shift = (packed & 0x100) != 0;
-    if (shift) keybd_event(0x10, 0, 0, UIntPtr.Zero);
-    Tap((byte)(packed & 0xFF));
-    if (shift) keybd_event(0x10, 0, 2, UIntPtr.Zero);
+    byte vk = Named(key);
+    bool vkShift = false;
+    if (vk == 0) {
+      if (key.Length != 1) return;
+      short packed = VkKeyScan(key[0]);
+      if (packed == -1) return;
+      vkShift = (packed & 0x100) != 0;
+      vk = (byte)(packed & 0xFF);
+    }
+    if (ctrl) keybd_event(0x11, 0, 0, UIntPtr.Zero);
+    if (alt) keybd_event(0x12, 0, 0, UIntPtr.Zero);
+    if (shift || vkShift) keybd_event(0x10, 0, 0, UIntPtr.Zero);
+    Tap(vk);
+    if (shift || vkShift) keybd_event(0x10, 0, 2, UIntPtr.Zero);
+    if (alt) keybd_event(0x12, 0, 2, UIntPtr.Zero);
+    if (ctrl) keybd_event(0x11, 0, 2, UIntPtr.Zero);
   }
 }
 "@
@@ -131,7 +172,15 @@ if ($listener.IsListening) {
           $ny = 0.0
           if ($msg.PSObject.Properties.Name -contains "x") { $nx = [double]$msg.x }
           if ($msg.PSObject.Properties.Name -contains "y") { $ny = [double]$msg.y }
-          [HarborCursor]::Apply($nx, $ny, [string]$msg.action, [string]$msg.button, [string]$msg.key)
+          $ctrl = $false
+          $alt = $false
+          $shift = $false
+          $wheel = 0
+          if ($msg.PSObject.Properties.Name -contains "ctrl" -and $msg.ctrl) { $ctrl = $true }
+          if ($msg.PSObject.Properties.Name -contains "alt" -and $msg.alt) { $alt = $true }
+          if ($msg.PSObject.Properties.Name -contains "shift" -and $msg.shift) { $shift = $true }
+          if ($msg.PSObject.Properties.Name -contains "delta") { $wheel = [int]$msg.delta }
+          [HarborCursor]::Apply($nx, $ny, [string]$msg.action, [string]$msg.button, [string]$msg.key, $ctrl, $alt, $shift, $wheel)
         }
         $res.StatusCode = 204
         $res.Close()

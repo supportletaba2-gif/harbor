@@ -5,7 +5,7 @@ import { FilePipe, type Transfer } from "./files";
 import { DeskLink } from "./link";
 import { createMachine } from "./machine";
 import { applyPageInput } from "./page-agent";
-import { aimNote, armWindowsPointer, postWindowsPointer, windowsPointerReady, type PointerArm } from "./windows-pointer";
+import { aimNote, armWindowsPointer, postWindowsClip, postWindowsPointer, windowsPointerReady, type PointerArm } from "./windows-pointer";
 import {
   makeId,
   makePin,
@@ -265,7 +265,10 @@ export function useHostDesk() {
             if (ok !== null) reportPointer(ok);
           });
         }
-        noteActivity(input, input.kind === "key" ? `Key ${input.key}` : "Windows pointer");
+        noteActivity(
+          input,
+          input.kind === "key" ? `Key ${input.key}` : input.kind === "wheel" ? "Scroll" : "Windows pointer",
+        );
         return;
       }
       if (sourceRef.current !== "desk") {
@@ -491,6 +494,9 @@ export function useHostDesk() {
             setChat((prev) => [...prev, { id: crypto.randomUUID(), from: event.from, text: event.text } satisfies ChatLine].slice(-40));
           } else if (event.type === "clip") {
             setClip(event.text);
+            if (sourceRef.current === "display" && aimRef.current === "windows") {
+              void postWindowsClip(event.text).then((ok) => reportPointer(ok));
+            }
           } else if (event.type === "aim") {
             aimRef.current = event.kind;
             setAimState(event.kind);

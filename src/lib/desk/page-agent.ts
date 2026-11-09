@@ -14,6 +14,7 @@ export function applyPageInput(input: DeskInput): { label: string; x?: number; y
     target.dispatchEvent(new KeyboardEvent("keydown", { key: input.key, bubbles: true, cancelable: true }));
     return { label: `Key ${input.key}` };
   }
+  if (input.kind === "wheel") return { label: "Scroll" };
   const point = pagePoint(input.x, input.y, window.innerWidth, window.innerHeight);
   if (input.kind === "move") return { label: "Pointer", ...point };
   const target = document.elementFromPoint(point.x, point.y);

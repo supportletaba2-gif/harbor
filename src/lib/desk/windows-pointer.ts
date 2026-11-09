@@ -59,14 +59,31 @@ export function pointerBody(input: DeskInput): string | null {
     if (!input.down) return null;
     const key = input.key.slice(0, 16);
     if (!key) return null;
-    return JSON.stringify({ action: "key", key });
+    const body: Record<string, unknown> = { action: "key", key };
+    if (input.ctrl) body.ctrl = true;
+    if (input.alt) body.alt = true;
+    if (input.shift) body.shift = true;
+    return JSON.stringify(body);
+  }
+  if (input.kind === "wheel") {
+    const point = screenPoint(input.x, input.y, 10001, 10001);
+    let notches = Math.round(-input.delta / 100);
+    if (notches === 0 && Math.abs(input.delta) >= 40) notches = input.delta > 0 ? -1 : 1;
+    notches = Math.max(-6, Math.min(6, notches));
+    if (!notches) return null;
+    return JSON.stringify({
+      action: "wheel",
+      x: point.x / 10000,
+      y: point.y / 10000,
+      delta: notches,
+    });
   }
   const point = screenPoint(input.x, input.y, 10001, 10001);
   return JSON.stringify({
     action: input.kind,
     x: point.x / 10000,
     y: point.y / 10000,
-    button: "left",
+    button: input.button === "right" ? "right" : "left",
   });
 }
 
@@ -81,6 +98,22 @@ export function postWindowsPointer(input: DeskInput): Promise<boolean | null> {
   return fetch(
     WINDOWS_POINTER_URL,
     loopback({ method: "POST", mode: "cors", headers: { "content-type": "application/json" }, body }),
+  )
+    .then((response) => response.ok || response.status === 204)
+    .catch(() => false);
+}
+
+export function postWindowsClip(text: string): Promise<boolean> {
+  const clean = text.slice(0, 2000);
+  if (!clean.trim()) return Promise.resolve(false);
+  return fetch(
+    WINDOWS_POINTER_URL,
+    loopback({
+      method: "POST",
+      mode: "cors",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "clip", key: clean }),
+    }),
   )
     .then((response) => response.ok || response.status === 204)
     .catch(() => false);

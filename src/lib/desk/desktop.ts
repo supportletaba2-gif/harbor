@@ -98,6 +98,7 @@ export function applyInput(model: DeskModel, input: DeskInput): string {
     if (!input.down) return "Key";
     return applyKey(model, input.key);
   }
+  if (input.kind === "wheel") return "Scroll";
   const x = clamp(input.x, 0, 1) * LOGICAL_W;
   const y = clamp(input.y, 0, 1) * LOGICAL_H;
   model.cursor.x = x;

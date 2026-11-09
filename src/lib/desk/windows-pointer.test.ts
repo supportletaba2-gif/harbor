@@ -12,8 +12,21 @@ describe("windows pointer", () => {
   it("sends a click and ignores a key release", () => {
     const body = pointerBody({ kind: "down", x: 0.5, y: 0.25 });
     assert.equal(body, JSON.stringify({ action: "down", x: 0.5, y: 0.25, button: "left" }));
+    assert.equal(
+      pointerBody({ kind: "down", x: 0.5, y: 0.25, button: "right" }),
+      JSON.stringify({ action: "down", x: 0.5, y: 0.25, button: "right" }),
+    );
     assert.equal(pointerBody({ kind: "key", key: "a", down: false }), null);
     assert.equal(pointerBody({ kind: "key", key: "Enter", down: true }), JSON.stringify({ action: "key", key: "Enter" }));
+    assert.equal(
+      pointerBody({ kind: "key", key: "c", down: true, ctrl: true }),
+      JSON.stringify({ action: "key", key: "c", ctrl: true }),
+    );
+    assert.equal(
+      pointerBody({ kind: "wheel", x: 0.2, y: 0.4, delta: 100 }),
+      JSON.stringify({ action: "wheel", x: 0.2, y: 0.4, delta: -1 }),
+    );
+    assert.equal(pointerBody({ kind: "wheel", x: 0.2, y: 0.4, delta: 10 }), null);
   });
 
   it("names the pointer mode", () => {
